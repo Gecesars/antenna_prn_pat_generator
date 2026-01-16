@@ -1116,49 +1116,83 @@ class DiagramsTab(ctk.CTkFrame):
         self.btn_clear = ctk.CTkButton(self.top_bar, text="Limpar Visualização", command=self.clear_view, fg_color="gray")
         self.btn_clear.pack(side="right", padx=5)
         
-        self.scroll = ctk.CTkScrollableFrame(self, label_text="Biblioteca de Diagramas (Clique para Carregar)")
-        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # Bind scroll on main frame
-        self.scroll.bind("<Enter>", self._bind_mouse_scroll)
-        self.scroll.bind("<Leave>", self._unbind_mouse_scroll)
+        # --- Dual Scrollable Area ---
+        self.container = ctk.CTkFrame(self)
+        self.container.pack(fill="both", expand=True, padx=10, pady=10)
+        self.container.grid_rowconfigure(0, weight=1)
+        self.container.grid_columnconfigure(0, weight=1)
+        
+        # Use simple tk.Canvas for scrolling
+        bg_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
+        self.canvas = tk.Canvas(self.container, highlightthickness=0, bg=bg_color)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        
+        self.vsb = ctk.CTkScrollbar(self.container, orientation="vertical", command=self.canvas.yview)
+        self.vsb.grid(row=0, column=1, sticky="ns")
+        
+        self.hsb = ctk.CTkScrollbar(self.container, orientation="horizontal", command=self.canvas.xview)
+        self.hsb.grid(row=1, column=0, sticky="ew")
+        
+        self.canvas.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
+        
+        # Inner Frame
+        self.scroll = ctk.CTkFrame(self.canvas, fg_color="transparent")
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scroll, anchor="nw")
         
         self.thumbnails = []
         self.grid_cols = 3
         
-        # Resize event
-        self.scroll.bind("<Configure>", self._on_resize)
+        # Events
+        self.scroll.bind("<Configure>", self._on_inner_frame_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
         
+        # Bind MouseWheel to canvas
+        self.canvas.bind("<Enter>", self._bind_mouse_scroll)
+        self.canvas.bind("<Leave>", self._unbind_mouse_scroll)
+
         # Auto Load
         self.load_library()
         
-    def _bind_mouse_scroll(self, event):
-        self.scroll._parent_canvas.bind_all("<MouseWheel>", self._on_mouse_scroll)
-        self.scroll._parent_canvas.bind_all("<Button-4>", self._on_mouse_scroll)
-        self.scroll._parent_canvas.bind_all("<Button-5>", self._on_mouse_scroll)
-
-    def _unbind_mouse_scroll(self, event):
-        self.scroll._parent_canvas.unbind_all("<MouseWheel>")
-        self.scroll._parent_canvas.unbind_all("<Button-4>")
-        self.scroll._parent_canvas.unbind_all("<Button-5>")
-
-    def _on_mouse_scroll(self, event):
-        if event.num == 4 or event.delta > 0:
-            self.scroll._parent_canvas.yview_scroll(-1, "units")
-        elif event.num == 5 or event.delta < 0:
-            self.scroll._parent_canvas.yview_scroll(1, "units")
-            
-    def _on_resize(self, event):
-        # Calculate optimal columns
-        w = event.width
-        # Thumbnail is 300px + 20px padding = 320px
-        # We need to subtract scrollbar width (~20px) and some internal padding (~20px) = ~40px
-        available_w = w - 50 
-        new_cols = max(1, available_w // 330)
+    def _on_inner_frame_configure(self, event):
+        # Update scrollregion to fit inner frame
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         
+    def _on_canvas_configure(self, event):
+        # Handle responsive resize of columns
+        w = event.width
+        # Determine columns
+        # Conservative: 320 thumb + 20 pad
+        new_cols = max(1, w // 340)
         if new_cols != self.grid_cols:
             self.grid_cols = new_cols
             self._regrid()
+    
+    def _bind_mouse_scroll(self, event):
+        self.canvas.bind_all("<MouseWheel>", self._on_mouse_scroll)
+        self.canvas.bind_all("<Button-4>", self._on_mouse_scroll)
+        self.canvas.bind_all("<Button-5>", self._on_mouse_scroll)
+        # Shift+Wheel for horizontal
+        self.canvas.bind_all("<Shift-MouseWheel>", self._on_mouse_scroll_h)
+
+    def _unbind_mouse_scroll(self, event):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+        self.canvas.unbind_all("<Shift-MouseWheel>")
+
+    def _on_mouse_scroll(self, event):
+        # Vertical
+        if event.num == 4 or event.delta > 0:
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5 or event.delta < 0:
+            self.canvas.yview_scroll(1, "units")
+            
+    def _on_mouse_scroll_h(self, event):
+        # Horizontal
+        if event.delta > 0:
+            self.canvas.xview_scroll(-1, "units")
+        else:
+            self.canvas.xview_scroll(1, "units")
             
     def _regrid(self):
         for idx, thumb in enumerate(self.thumbnails):
@@ -1196,15 +1230,13 @@ class DiagramsTab(ctk.CTkFrame):
         thumb = DiagramThumbnail(self.scroll, pattern, on_click=self.load_callback)
         self.thumbnails.append(thumb)
         
-        # Also bind scroll events to the thumbnail elements to prevent trapping
-        # recursively bind to all children
+        # Also bind scroll events to the thumbnail elements
         def bind_recursive(w):
             w.bind("<MouseWheel>", self._on_mouse_scroll)
             w.bind("<Button-4>", self._on_mouse_scroll)
             w.bind("<Button-5>", self._on_mouse_scroll)
             for child in w.winfo_children():
                 bind_recursive(child)
-        
         bind_recursive(thumb)
 
         idx = len(self.thumbnails) - 1
