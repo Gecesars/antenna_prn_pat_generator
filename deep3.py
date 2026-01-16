@@ -709,10 +709,34 @@ ctk.set_appearance_mode("Dark")
 
 # ----------------------------- Database Manager ----------------------------- #
 class DatabaseManager:
-    DB_NAME = "library.db"
+    # Determine user data directory to avoid "Read-only file system" errors in Program Files
+    APP_DIR = os.path.join(os.path.expanduser("~"), ".eftx_converter")
+    if not os.path.exists(APP_DIR):
+        os.makedirs(APP_DIR, exist_ok=True)
+        
+    DB_NAME = os.path.join(APP_DIR, "library.db")
 
     @classmethod
     def init_db(cls):
+        # Migration: Check if legacy db exists and move it, or copy default from install dir if needed
+        import shutil
+        
+        # If user DB doesn't exist, try to copy from install location
+        if not os.path.exists(cls.DB_NAME):
+            # Potential install locations
+            candidates = [
+                os.path.join(os.getcwd(), "library.db"),
+                os.path.join(os.path.dirname(__file__), "library.db")
+            ]
+            for src in candidates:
+                if os.path.exists(src):
+                    try:
+                        shutil.copy2(src, cls.DB_NAME)
+                        print(f"Initialized user DB from {src}")
+                        break
+                    except Exception as e:
+                        print(f"Failed to copy default DB: {e}")
+        
         conn = sqlite3.connect(cls.DB_NAME)
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS diagrams
