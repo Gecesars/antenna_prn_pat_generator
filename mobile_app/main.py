@@ -20,9 +20,9 @@ class MobileApp:
         self.filename = "Sem arquivo"
         
         # UI Elements
-        self.img_plot = ft.Image(src_base64="", width=350, height=350, fit=ft.ImageFit.CONTAIN)
+        self.img_plot = ft.Image(src_base64="", width=350, height=350, fit="contain")
         self.lbl_status = ft.Text("Selecione um arquivo .csv ou .txt")
-        self.lbl_file = ft.Text(self.filename, size=20, weight=ft.FontWeight.BOLD)
+        self.lbl_file = ft.Text(self.filename, size=20, weight="bold")
         
         # File Picker
         self.file_picker = ft.FilePicker(on_result=self.pick_files_result)
@@ -33,9 +33,9 @@ class MobileApp:
             ft.Column([
                 ft.Container(
                     content=ft.Column([
-                        ft.Text("EFTX Mobile", size=30, weight=ft.FontWeight.BOLD),
+                        ft.Text("EFTX Mobile", size=30, weight="bold"),
                         self.lbl_file,
-                    ], alignment=ft.MainAxisAlignment.CENTER),
+                    ], alignment="center"),
                     padding=20
                 ),
                 ft.Container(
@@ -48,7 +48,7 @@ class MobileApp:
                 ft.Row([
                     ft.ElevatedButton("Importar CSV/TXT", icon=ft.icons.UPLOAD_FILE, 
                                      on_click=lambda _: self.file_picker.pick_files(allow_multiple=False)),
-                ], alignment=ft.MainAxisAlignment.CENTER),
+                ], alignment="center"),
                 
                 ft.Divider(),
                 
@@ -62,15 +62,15 @@ class MobileApp:
                         selected={"polar"},
                         on_change=self.change_plot_mode
                     )
-                ], alignment=ft.MainAxisAlignment.CENTER),
+                ], alignment="center"),
                 
                 self.lbl_status
-            ], scroll=ft.ScrollMode.AUTO, expand=True)
+            ], scroll="auto", expand=True)
         )
         
         self.plot_mode = "polar"
 
-    def pick_files_result(self, e: ft.FilePickerResultEvent):
+    def pick_files_result(self, e):
         if e.files:
             path = e.files[0].path
             name = e.files[0].name
