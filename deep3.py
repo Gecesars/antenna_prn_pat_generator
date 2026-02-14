@@ -367,8 +367,11 @@ def build_diagram_export_figure(
     if prefer_polar is None:
         prefer_polar = (k == "H")
 
-    fig = Figure(figsize=(9.4, 5.4), dpi=120)
-    ax = fig.add_subplot(111, projection="polar" if prefer_polar else None)
+    fig = Figure(figsize=(10.8, 5.4), dpi=120)
+    gs = fig.add_gridspec(1, 2, width_ratios=[4.8, 1.9], wspace=0.08)
+    ax = fig.add_subplot(gs[0, 0], projection="polar" if prefer_polar else None)
+    ax_info = fig.add_subplot(gs[0, 1])
+    ax_info.axis("off")
     color = line_color or ("#d55e00" if k == "H" else "#1f77b4")
 
     if prefer_polar:
@@ -389,16 +392,15 @@ def build_diagram_export_figure(
     ax.set_title(title)
 
     metrics = compute_diagram_metrics(k, a, v_norm)
-    metric_text = "\n".join(format_diagram_metric_lines(metrics))
-    ax.text(
-        0.99,
-        0.99,
+    metric_text = "Metricas\n" + "\n".join(format_diagram_metric_lines(metrics))
+    ax_info.text(
+        0.03,
+        0.98,
         metric_text,
-        transform=ax.transAxes,
-        ha="right",
+        ha="left",
         va="top",
-        fontsize=8.5,
-        bbox=dict(boxstyle="round,pad=0.30", facecolor="white", edgecolor="#666666", alpha=0.90),
+        fontsize=9.0,
+        bbox=dict(boxstyle="round,pad=0.40", facecolor="#f9fbfd", edgecolor="#9aa7b3", alpha=0.98),
     )
     return fig, metrics
 
@@ -3730,8 +3732,11 @@ class PATConverterApp(ctk.CTk):
             with open(json_path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
 
-            fig = Figure(figsize=(8, 4.5), dpi=120)
-            ax = fig.add_subplot(111)
+            fig = Figure(figsize=(10.2, 4.6), dpi=120)
+            gs = fig.add_gridspec(1, 2, width_ratios=[4.7, 1.9], wspace=0.08)
+            ax = fig.add_subplot(gs[0, 0])
+            ax_info = fig.add_subplot(gs[0, 1])
+            ax_info.axis("off")
             ax.set_title("AF Inicial vs Final (dB de campo)")
             ax.set_xlabel("Elevacao [deg]")
             ax.set_ylabel("Amplitude [dB]")
@@ -3745,16 +3750,25 @@ class PATConverterApp(ctk.CTk):
                 ax.axvline(c, color="#228b22", linestyle=":", linewidth=1.1)
             try:
                 m = compute_diagram_metrics("V", eps, e_fin)
-                txt = "\n".join(format_diagram_metric_lines(m))
-                ax.text(
-                    0.99,
-                    0.99,
+                lines = format_diagram_metric_lines(m)
+                tp = self.vert_synth_result.get("target_percent", None)
+                ap = self.vert_synth_result.get("achieved_percent", None)
+                no = self.vert_synth_result.get("null_order", None)
+                if no is not None:
+                    lines.insert(0, f"Nulo alvo: {int(no)}o")
+                if tp is not None and math.isfinite(float(tp)):
+                    lines.insert(1, f"Null fill alvo: {float(tp):.2f}%")
+                if ap is not None and math.isfinite(float(ap)):
+                    lines.insert(2, f"Null fill atingido: {float(ap):.2f}%")
+                txt = "Metricas\n" + "\n".join(lines)
+                ax_info.text(
+                    0.03,
+                    0.98,
                     txt,
-                    transform=ax.transAxes,
-                    ha="right",
+                    ha="left",
                     va="top",
-                    fontsize=8.2,
-                    bbox=dict(boxstyle="round,pad=0.28", facecolor="white", edgecolor="#666666", alpha=0.90),
+                    fontsize=8.7,
+                    bbox=dict(boxstyle="round,pad=0.40", facecolor="#f9fbfd", edgecolor="#9aa7b3", alpha=0.98),
                 )
             except Exception:
                 pass
