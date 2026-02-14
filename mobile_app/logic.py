@@ -4,7 +4,10 @@ import re
 import math
 import csv
 import numpy as np
-from io import StringIO
+from io import StringIO, BytesIO
+import matplotlib.figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import base64
 from typing import List, Tuple, Optional
 
 # Constants
@@ -127,3 +130,69 @@ def parse_auto(path: str) -> Tuple[np.ndarray, np.ndarray]:
 def normalize_linear(values: np.ndarray) -> np.ndarray:
     m = np.max(values) if values.size > 0 else 1.0
     return values / (m if m > 0 else 1.0)
+
+def linear_to_db(values: np.ndarray) -> np.ndarray:
+    """Converte valores lineares (0..1) para dB (-inf..0)."""
+    # Evitar log(0)
+    v = values.copy()
+    v[v <= 1e-9] = 1e-9
+    return 20 * np.log10(v)
+
+# ----------------------------- Export ----------------------------- #
+
+def render_table_image(angles: np.ndarray, values: np.ndarray, unit: str, color: str) -> str:
+    """
+    Gera uma imagem (base64) de uma tabela com 4 colunas (dobrando os dados).
+    Colunas: [Angle, Value, |  Angle, Value]
+    """
+    # Formatar dados
+    rows = []
+    n = len(angles)
+    mid = (n + 1) // 2
+    
+    # Parametros de estilo
+    col_labels = ["Ângulo (º)", f"Valor ({unit})", "Ângulo (º)", f"Valor ({unit})"]
+    cell_text = []
+    
+    for i in range(mid):
+        # Esquerda
+        a1 = angles[i]
+        v1 = values[i]
+        
+        # Direita (se existir)
+        if i + mid < n:
+            a2 = angles[i+mid]
+            v2 = values[i+mid]
+            row = [f"{a1:.1f}", f"{v1:.2f}", f"{a2:.1f}", f"{v2:.2f}"]
+        else:
+            row = [f"{a1:.1f}", f"{v1:.2f}", "", ""]
+            
+        cell_text.append(row)
+        
+    # Plotar tabela
+    # Altura baseada no numero de linhas
+    h = max(4, len(cell_text) * 0.3 + 1)
+    fig = matplotlib.figure.Figure(figsize=(8, h), dpi=100)
+    ax = fig.add_subplot(111)
+    ax.axis('off')
+    
+    table = ax.table(cellText=cell_text, colLabels=col_labels, loc='center', cellLoc='center')
+    
+    # Estilizacao basica
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
+    
+    # Header color
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_facecolor(color if color else "#dddddd")
+            cell.set_text_props(weight='bold', color='white' if color else 'black')
+            
+    fig.tight_layout()
+    
+    buf = BytesIO()
+    canvas = FigureCanvasAgg(fig)
+    canvas.print_png(buf)
+    data = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return data
