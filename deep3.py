@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-CTk PAT Converter Ã¢â‚¬â€ Arquivo | Array Vertical | PainÃƒÂ©is Horizontais
+CTk PAT Converter — Arquivo | Array Vertical | Painéis Horizontais
 """
 
 from __future__ import annotations
@@ -14,10 +14,15 @@ import sqlite3
 import datetime
 import io
 import shutil
+import tempfile
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from io import StringIO
 from tkinter import filedialog, messagebox
 from typing import List, Tuple, Optional
+from logging.handlers import RotatingFileHandler
 
 import numpy as np
 from PIL import Image
@@ -31,6 +36,54 @@ from null_fill_synthesis import synth_null_fill_by_order, weights_to_harness
 # ----------------------------- Constantes ----------------------------- #
 C0 = 299_792_458.0  # m/s
 NUM_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+APP_USER_DIR = os.path.join(os.path.expanduser("~"), ".eftx_converter")
+LOG_DIR = os.path.join(APP_USER_DIR, "logs")
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
+
+
+def ensure_app_dirs() -> None:
+    os.makedirs(APP_USER_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+
+def setup_logging() -> logging.Logger:
+    ensure_app_dirs()
+    logger = logging.getLogger("eftx")
+    if logger.handlers:
+        return logger
+    logger.setLevel(logging.INFO)
+    handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    handler.setFormatter(fmt)
+    logger.addHandler(handler)
+    logger.propagate = False
+    logger.info("Logging initialized.")
+    return logger
+
+
+LOGGER = setup_logging()
+
+
+def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
+    """
+    Escrita atomica no mesmo diretorio do destino.
+    """
+    ensure_app_dirs()
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".tmp", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="\n") as tmp:
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 def _is_float(s: str) -> bool:
     return bool(NUM_RE.match(s.strip().replace(",", ".")))
@@ -48,7 +101,7 @@ def parse_hfss_csv(path: str) -> Tuple[np.ndarray, np.ndarray]:
     rows = list(reader)
     if not rows:
         raise ValueError("Arquivo vazio.")
-    # Se a primeira linha tiver letras, ÃƒÂ© header
+    # Se a primeira linha tiver letras, é header
     if any(ch.isalpha() for ch in "".join(rows[0])):
         rows = rows[1:]
     thetas: List[float] = []
@@ -57,7 +110,7 @@ def parse_hfss_csv(path: str) -> Tuple[np.ndarray, np.ndarray]:
         if len(r) < 4:
             continue
         t_raw = r[2].strip().replace(",", ".")   # Theta [deg]
-        v_raw = r[-1].strip().replace(",", ".")  # ÃƒÂºltima coluna (E/Emax linear)
+        v_raw = r[-1].strip().replace(",", ".")  # última coluna (E/Emax linear)
         if _is_float(t_raw) and _is_float(v_raw):
             t = float(t_raw)
             v = float(v_raw)
@@ -71,7 +124,7 @@ def parse_hfss_csv(path: str) -> Tuple[np.ndarray, np.ndarray]:
     return a[order], v[order]
 
 def parse_generic_table(path: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Fallback p/ TXT/TSV com 2+ nÃƒÂºmeros/linha; se 3+, ignora primeiro (ÃƒÂ­ndice)."""
+    """Fallback p/ TXT/TSV com 2+ números/linha; se 3+, ignora primeiro (índice)."""
     angles: List[float] = []
     vals: List[float] = []
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -91,14 +144,14 @@ def parse_generic_table(path: str) -> Tuple[np.ndarray, np.ndarray]:
             if math.isfinite(angle_deg) and math.isfinite(value):
                 angles.append(angle_deg); vals.append(value)
     if not angles:
-        raise ValueError("Nenhum dado numÃƒÂ©rico vÃƒÂ¡lido encontrado no arquivo.")
+        raise ValueError("Nenhum dado numérico válido encontrado no arquivo.")
     a = np.asarray(angles, dtype=float)
     v = np.asarray(vals, dtype=float)
     order = np.argsort(a)
     return a[order], v[order]
 
 def parse_auto(path: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Tenta HFSS CSV; se falhar, parse genÃƒÂ©rico."""
+    """Tenta HFSS CSV; se falhar, parse genérico."""
     try:
         return parse_hfss_csv(path)
     except Exception:
@@ -120,7 +173,7 @@ def resample_vertical(angles_deg: np.ndarray, values: np.ndarray, norm: str = "n
     tgt = np.round(np.arange(-90.0, 90.0 + 1e-9, 0.1), 1)
     mask = (angles_deg >= -90.0) & (angles_deg <= 90.0)
     if not np.any(mask):
-        raise ValueError("Tabela vertical nÃƒÂ£o cobre o intervalo [-90, 90] graus.")
+        raise ValueError("Tabela vertical não cobre o intervalo [-90, 90] graus.")
     a = angles_deg[mask]; v = values[mask]
     a_u, idx = np.unique(a, return_inverse=True)
     v_acc = np.zeros_like(a_u); cnt = np.zeros_like(a_u)
@@ -148,12 +201,12 @@ def resample_horizontal(angles_deg: np.ndarray, values: np.ndarray, norm: str = 
 def _resample_vertical_adt(angles_deg: np.ndarray, values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Reamostra VRP para ADT no intervalo fixo [-90, 90] com passo de 0.1 grau.
-    Tenta primeiro no sistema original; se necessÃƒÂ¡rio, aplica ajustes comuns.
+    Tenta primeiro no sistema original; se necessário, aplica ajustes comuns.
     """
     a = np.asarray(angles_deg, dtype=float)
     v = np.asarray(values, dtype=float)
 
-    # Caso padrÃƒÂ£o: arquivo jÃƒÂ¡ estÃƒÂ¡ em [-90, 90]
+    # Caso padrão: arquivo já está em [-90, 90]
     try:
         return resample_vertical(a, v, norm="none")
     except Exception:
@@ -165,11 +218,11 @@ def _resample_vertical_adt(angles_deg: np.ndarray, values: np.ndarray) -> Tuple[
     except Exception:
         pass
 
-    # Fallback final: wrap para [-180, 180] e extrai faixa ÃƒÂºtil vertical
+    # Fallback final: wrap para [-180, 180] e extrai faixa útil vertical
     try:
         return resample_vertical(_wrap_to_180(a), v, norm="none")
     except Exception as e:
-        raise ValueError("VRP nÃƒÂ£o cobre a faixa exigida para ADT (-90 a 90 graus).") from e
+        raise ValueError("VRP não cobre a faixa exigida para ADT (-90 a 90 graus).") from e
 
 def apply_vertical_electrical_tilt(
     angles_deg: np.ndarray,
@@ -467,9 +520,239 @@ def render_table_image(angles: np.ndarray, values: np.ndarray, unit: str, color:
     buf.close()
     return img
 
-# ----------------------------- IntegraÃƒÂ§ÃƒÂ£o e MÃƒÂ©tricas ----------------------------- #
+
+class PlotInteractor:
+    def __init__(
+        self,
+        ax,
+        canvas,
+        get_series_callable,
+        kind: str,
+        polar: bool,
+        on_measure_update=None,
+        on_status=None,
+        on_context_menu=None,
+    ):
+        self.ax = ax
+        self.canvas = canvas
+        self.get_series = get_series_callable
+        self.kind = str(kind).upper()  # H|V
+        self.polar = bool(polar)
+        self.on_measure_update = on_measure_update
+        self.on_status = on_status
+        self.on_context_menu = on_context_menu
+
+        self.markerA = None
+        self.markerB = None
+        self.active = None
+        self.dragging = False
+        self._order = 0
+
+        self.default_xlim = None if self.polar else tuple(self.ax.get_xlim())
+        self.default_ylim = tuple(self.ax.get_ylim())
+
+        self._cid_press = self.canvas.mpl_connect("button_press_event", self.on_press)
+        self._cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
+        self._cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
+        self._cid_scroll = self.canvas.mpl_connect("scroll_event", self.on_scroll)
+
+    def disconnect(self):
+        for cid in (self._cid_press, self._cid_release, self._cid_motion, self._cid_scroll):
+            try:
+                self.canvas.mpl_disconnect(cid)
+            except Exception:
+                pass
+
+    def _event_theta_deg(self, event):
+        if self.polar:
+            if event.xdata is None:
+                return None
+            deg = float(np.rad2deg(event.xdata))
+            if self.kind == "H":
+                deg = ((deg + 180.0) % 360.0) - 180.0
+            return deg
+        if event.xdata is None:
+            return None
+        return float(event.xdata)
+
+    def _nearest_point(self, theta_deg: float):
+        ang, val = self.get_series()
+        if ang is None or val is None:
+            return None
+        a = np.asarray(ang, dtype=float).reshape(-1)
+        v = np.asarray(val, dtype=float).reshape(-1)
+        if a.size == 0 or v.size == 0 or a.size != v.size:
+            return None
+        if self.kind == "H":
+            d = np.abs(((a - theta_deg + 180.0) % 360.0) - 180.0)
+            idx = int(np.argmin(d))
+        else:
+            idx = int(np.argmin(np.abs(a - theta_deg)))
+        return float(a[idx]), float(v[idx])
+
+    def _theta_distance(self, t1: float, t2: float) -> float:
+        if self.kind == "H":
+            return float(abs(((t2 - t1 + 180.0) % 360.0) - 180.0))
+        return float(abs(t2 - t1))
+
+    def _hit_marker(self, theta_deg: float, tol_deg: float = 2.0):
+        for name, mk in (("A", self.markerA), ("B", self.markerB)):
+            if not mk:
+                continue
+            d = self._theta_distance(theta_deg, float(mk["theta_deg"]))
+            if d <= tol_deg:
+                self.active = name
+                return True
+        return False
+
+    def _remove_marker_artist(self, mk):
+        if not mk:
+            return
+        art = mk.get("artist")
+        if art is None:
+            return
+        try:
+            art.remove()
+        except Exception:
+            pass
+
+    def _draw_marker(self, which: str, theta_deg: float, v_lin: float):
+        prev = self.markerA if which == "A" else self.markerB
+        self._remove_marker_artist(prev)
+
+        color = "#d62728" if which == "A" else "#2ca02c"
+        if self.polar:
+            theta = np.deg2rad(theta_deg if self.kind != "H" else ((theta_deg + 360.0) % 360.0))
+            art = self.ax.plot([theta, theta], [0.0, float(max(v_lin, 0.0))], color=color, linewidth=1.4)[0]
+        else:
+            art = self.ax.axvline(theta_deg, color=color, linewidth=1.4)
+
+        data = {
+            "which": which,
+            "theta_deg": float(theta_deg),
+            "v_lin": float(v_lin),
+            "artist": art,
+            "order": self._order,
+        }
+        self._order += 1
+        if which == "A":
+            self.markerA = data
+        else:
+            self.markerB = data
+        self._emit_measure_update()
+
+    def _emit_measure_update(self):
+        if callable(self.on_measure_update):
+            try:
+                self.on_measure_update(self.markerA, self.markerB, self.kind)
+            except Exception:
+                LOGGER.exception("Falha ao atualizar painel de medicao.")
+
+    def clear_markers(self):
+        self._remove_marker_artist(self.markerA)
+        self._remove_marker_artist(self.markerB)
+        self.markerA = None
+        self.markerB = None
+        self._emit_measure_update()
+        self.canvas.draw_idle()
+
+    def reset_view(self):
+        if not self.polar and self.default_xlim is not None:
+            self.ax.set_xlim(self.default_xlim)
+        if self.default_ylim is not None:
+            self.ax.set_ylim(self.default_ylim)
+        self.canvas.draw_idle()
+
+    def on_press(self, event):
+        if event.inaxes != self.ax:
+            return
+
+        if event.button == 3:
+            if callable(self.on_context_menu):
+                self.on_context_menu(event, self)
+            return
+
+        if event.button != 1:
+            return
+
+        if bool(getattr(event, "dblclick", False)):
+            self.reset_view()
+            if callable(self.on_status):
+                self.on_status("View reset.")
+            return
+
+        theta = self._event_theta_deg(event)
+        if theta is None:
+            return
+
+        if self._hit_marker(theta):
+            self.dragging = True
+            return
+
+        use_b = bool(getattr(event, "key", None) == "shift")
+        if not use_b:
+            if self.markerA is None:
+                use_b = False
+            elif self.markerB is None:
+                use_b = True
+            else:
+                use_b = self.markerA.get("order", 0) <= self.markerB.get("order", 0)
+
+        which = "B" if use_b else "A"
+        pt = self._nearest_point(theta)
+        if pt is None:
+            return
+        t_deg, v_lin = pt
+        self.active = which
+        self._draw_marker(which, t_deg, v_lin)
+        self.canvas.draw_idle()
+        if callable(self.on_status):
+            self.on_status(f"Marker {which}: theta={t_deg:.2f} deg | lin={v_lin:.4f}")
+
+    def on_release(self, event):
+        if event.button == 1:
+            self.dragging = False
+
+    def on_motion(self, event):
+        if event.inaxes != self.ax:
+            return
+        theta = self._event_theta_deg(event)
+        if theta is None:
+            return
+        if not self.dragging or self.active not in ("A", "B"):
+            return
+        pt = self._nearest_point(theta)
+        if pt is None:
+            return
+        t_deg, v_lin = pt
+        self._draw_marker(self.active, t_deg, v_lin)
+        self.canvas.draw_idle()
+        if callable(self.on_status):
+            self.on_status(f"Marker {self.active}: theta={t_deg:.2f} deg | lin={v_lin:.4f}")
+
+    def on_scroll(self, event):
+        if event.inaxes != self.ax:
+            return
+        base = 1.15
+        scale = 1.0 / base if event.button == "up" else base
+        if self.polar:
+            rmin, rmax = self.ax.get_ylim()
+            r = event.ydata if event.ydata is not None else (rmin + rmax) / 2.0
+            nmin = r - (r - rmin) * scale
+            nmax = r + (rmax - r) * scale
+            self.ax.set_ylim(max(0.0, nmin), max(0.01, nmax))
+        else:
+            xmin, xmax = self.ax.get_xlim()
+            ymin, ymax = self.ax.get_ylim()
+            x = event.xdata if event.xdata is not None else (xmin + xmax) / 2.0
+            y = event.ydata if event.ydata is not None else (ymin + ymax) / 2.0
+            self.ax.set_xlim(x - (x - xmin) * scale, x + (xmax - x) * scale)
+            self.ax.set_ylim(y - (y - ymin) * scale, y + (ymax - y) * scale)
+        self.canvas.draw_idle()
+
+# ----------------------------- Integração e Métricas ----------------------------- #
 def simpson(y: np.ndarray, dx: float) -> float:
-    """Simpson composta p/ passo uniforme (ajuste de ÃƒÂºltimo intervalo se n par)."""
+    """Simpson composta p/ passo uniforme (ajuste de último intervalo se n par)."""
     n = len(y)
     if n < 2:
         return 0.0
@@ -507,7 +790,7 @@ def hpbw_deg(angles_deg: np.ndarray, e_lin: np.ndarray) -> float:
     return float(aR - aL)
 
 def directivity_2d_cut(angles_deg: np.ndarray, e_lin: np.ndarray, span_deg: float) -> float:
-    """Diretividade 2D do corte: DÃ¢â€šâ€šD = span_rad / Ã¢Ë†Â« P dÃŽÂ¸, com P = (E/Emax)Ã‚Â² e ÃŽÂ¸ em rad."""
+    """Diretividade 2D do corte: D₂D = span_rad / ∫ P dθ, com P = (E/Emax)² e θ em rad."""
     e = e_lin / (np.max(e_lin) if np.max(e_lin) > 0 else 1.0)
     p = e * e
     ang_rad = np.deg2rad(angles_deg)
@@ -520,9 +803,9 @@ def directivity_2d_cut(angles_deg: np.ndarray, e_lin: np.ndarray, span_deg: floa
         return float("nan")
     return float(span_rad / integral)
 
-# ----------------------------- ValidaÃƒÂ§ÃƒÂ£o de Entrada ----------------------------- #
+# ----------------------------- Validação de Entrada ----------------------------- #
 def validate_float(P):
-    """ValidaÃƒÂ§ÃƒÂ£o para campos de entrada numÃƒÂ©ricos"""
+    """Validação para campos de entrada numéricos"""
     if P == "" or P == "-" or P == "+":
         return True
     try:
@@ -532,7 +815,7 @@ def validate_float(P):
         return False
 
 def validate_int(P):
-    """ValidaÃƒÂ§ÃƒÂ£o para campos de entrada inteiros"""
+    """Validação para campos de entrada inteiros"""
     if P == "":
         return True
     try:
@@ -551,12 +834,12 @@ def _list_to_array(data: Optional[List[float]]) -> Optional[np.ndarray]:
         return None
     return np.asarray(data, dtype=float)
 
-# ----------------------------- Helpers de exportaÃƒÂ§ÃƒÂ£o PRN ----------------------------- #
-def write_prn_file(path: str, name: str, make: str, frequency: float, freq_unit: str,
-                  h_width: float, v_width: float, front_to_back: float, gain: float,
-                  h_angles: np.ndarray, h_values: np.ndarray,
-                  v_angles: np.ndarray, v_values: np.ndarray) -> None:
-    """Escreve arquivo PRN com valores em dB de AtenuaÃƒÂ§ÃƒÂ£o.
+# ----------------------------- Helpers de exportação PRN ----------------------------- #
+def _write_prn_file_legacy(path: str, name: str, make: str, frequency: float, freq_unit: str,
+                          h_width: float, v_width: float, front_to_back: float, gain: float,
+                          h_angles: np.ndarray, h_values: np.ndarray,
+                          v_angles: np.ndarray, v_values: np.ndarray) -> None:
+    """Escreve arquivo PRN com valores em dB de Atenuação.
        Suporta Vertical 0..360 direto (se v_angles cobrir range) ou mapeamento de -90..90.
     """
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -616,7 +899,7 @@ def write_prn_file(path: str, name: str, make: str, frequency: float, freq_unit:
 
 # ----------------------------- PRN Parsing ----------------------------- #
 def parse_prn(path: str) -> dict:
-    """LÃƒÂª arquivo .PRN. Converte dB Atten -> Linear. Preserva Vertical 0-360."""
+    """Lê arquivo .PRN. Converte dB Atten -> Linear. Preserva Vertical 0-360."""
     data = {"NAME": "", "MAKE": "", "FREQUENCY": "", "H_WIDTH": "", "V_WIDTH": "",
             "GAIN": "", "TILT": "", "FRONT_TO_BACK": "",
             "h_angles": [], "h_values": [],
@@ -682,9 +965,11 @@ class PRNViewerModal(ctk.CTkToplevel):
         self.prn_data = prn_data
         self.file_path = file_path
         
-        # State for plot types: "Polar" or "Planar"
+        # Convencao fixa:
+        # - Azimute (Horizontal) em polar
+        # - Elevacao (Vertical) em planar
         self.h_plot_type = tk.StringVar(value="Polar")
-        self.v_plot_type = tk.StringVar(value="Polar") # Default V to Polar too
+        self.v_plot_type = tk.StringVar(value="Planar")
         
         # Main layout: Left (Metadata/Stats), Right (Plots)
         self.grid_columnconfigure(1, weight=1)
@@ -712,7 +997,7 @@ class PRNViewerModal(ctk.CTkToplevel):
             self.entries[f] = ent
 
         # --- Comparison / Calc Stats ---
-        ctk.CTkLabel(self.left_frame, text="CÃƒÂ¡lculos AutomÃƒÂ¡ticos", font=ctk.CTkFont(weight="bold", size=16)).pack(pady=(20, 10))
+        ctk.CTkLabel(self.left_frame, text="Cálculos Automáticos", font=ctk.CTkFont(weight="bold", size=16)).pack(pady=(20, 10))
         
         self.stats_text = ctk.CTkTextbox(self.left_frame, height=200)
         self.stats_text.pack(fill="x", padx=5)
@@ -739,8 +1024,7 @@ class PRNViewerModal(ctk.CTkToplevel):
         h_ctrl = ctk.CTkFrame(self.frame_h, height=30)
         h_ctrl.pack(side="top", fill="x", padx=5, pady=2)
         ctk.CTkLabel(h_ctrl, text="Horizontal").pack(side="left")
-        ctk.CTkRadioButton(h_ctrl, text="Polar", variable=self.h_plot_type, value="Polar", command=self._update_h_plot).pack(side="right", padx=5)
-        ctk.CTkRadioButton(h_ctrl, text="Planar", variable=self.h_plot_type, value="Planar", command=self._update_h_plot).pack(side="right", padx=5)
+        ctk.CTkLabel(h_ctrl, text="Polar (fixo)").pack(side="right", padx=5)
         
         self.fig_h = Figure(figsize=(4, 3), dpi=100)
         self.canvas_h = FigureCanvasTkAgg(self.fig_h, master=self.frame_h)
@@ -756,8 +1040,7 @@ class PRNViewerModal(ctk.CTkToplevel):
         v_ctrl = ctk.CTkFrame(self.frame_v, height=30)
         v_ctrl.pack(side="top", fill="x", padx=5, pady=2)
         ctk.CTkLabel(v_ctrl, text="Vertical").pack(side="left")
-        ctk.CTkRadioButton(v_ctrl, text="Polar", variable=self.v_plot_type, value="Polar", command=self._update_v_plot).pack(side="right", padx=5)
-        ctk.CTkRadioButton(v_ctrl, text="Planar", variable=self.v_plot_type, value="Planar", command=self._update_v_plot).pack(side="right", padx=5)
+        ctk.CTkLabel(v_ctrl, text="Planar (fixo)").pack(side="right", padx=5)
         
         self.fig_v = Figure(figsize=(4, 3), dpi=100)
         self.canvas_v = FigureCanvasTkAgg(self.fig_v, master=self.frame_v)
@@ -779,7 +1062,7 @@ class PRNViewerModal(ctk.CTkToplevel):
             h_max = np.max(h_val) if np.max(h_val) > 0 else 1.0
             h_norm = h_val / h_max
             calc_h_bw = self._calc_hpbw_generic(h_ang, h_norm)
-            txt += f"HPBW Calc: {calc_h_bw:.2f}Ã‚Â° / File: {self.entries['H_WIDTH'].get()}\n"
+            txt += f"HPBW Calc: {calc_h_bw:.2f}° / File: {self.entries['H_WIDTH'].get()}\n"
             
             # F/B Ratio check
             # ... (kept simple)
@@ -790,11 +1073,11 @@ class PRNViewerModal(ctk.CTkToplevel):
             v_max = np.max(v_val) if np.max(v_val) > 0 else 1.0
             v_norm = v_val / v_max
             calc_v_bw = self._calc_hpbw_generic(v_ang, v_norm)
-            txt += f"HPBW Calc: {calc_v_bw:.2f}Ã‚Â° / File: {self.entries['V_WIDTH'].get()}\n"
+            txt += f"HPBW Calc: {calc_v_bw:.2f}° / File: {self.entries['V_WIDTH'].get()}\n"
             
             idx_v_peak = np.argmax(v_norm)
             peak_ang_v = v_ang[idx_v_peak]
-            txt += f"Peak Angle: {peak_ang_v:.1f}Ã‚Â°\n"
+            txt += f"Peak Angle: {peak_ang_v:.1f}°\n"
         else:
             txt += "Sem dados.\n"
 
@@ -816,228 +1099,125 @@ class PRNViewerModal(ctk.CTkToplevel):
     def _update_h_plot(self):
         h_ang = self.prn_data["h_angles"]
         h_val = self.prn_data["h_values"]
-        mode = self.h_plot_type.get()
+        self.h_plot_type.set("Polar")
         self.fig_h.clf()
-        if mode == "Polar":
-            ax = self.fig_h.add_subplot(111, projection="polar")
-            ax.set_title("Horizontal (Polar)")
-            theta = np.deg2rad(h_ang)
-            ax.plot(theta, h_val)
-            ax.set_theta_zero_location('N')
-            ax.set_theta_direction(-1)
-        else:
-            ax = self.fig_h.add_subplot(111)
-            ax.set_title("Horizontal (Planar)")
-            ax.plot(h_ang, h_val)
-            ax.set_xlabel("Angle [deg]")
-            ax.set_ylabel("Linear")
-            ax.grid(True, alpha=0.3)
+        ax = self.fig_h.add_subplot(111, projection="polar")
+        ax.set_title("Horizontal (Polar)")
+        theta = np.deg2rad(h_ang)
+        ax.plot(theta, h_val)
+        ax.set_theta_zero_location('N')
+        ax.set_theta_direction(-1)
         self.canvas_h.draw()
         
     def _update_v_plot(self):
         v_ang = self.prn_data["v_angles"]
         v_val = self.prn_data["v_values"]
-        mode = self.v_plot_type.get()
+        self.v_plot_type.set("Planar")
         self.fig_v.clf()
-        if mode == "Polar":
-            ax = self.fig_v.add_subplot(111, projection="polar")
-            ax.set_title("Vertical (Polar)")
-            theta = np.deg2rad(v_ang)
-            ax.plot(theta, v_val, color='orange')
-            # 0 at Top (Zenith), 90 at Right (Horizon)
-            ax.set_theta_zero_location('N')
-            ax.set_theta_direction(-1) 
-        else:
-            ax = self.fig_v.add_subplot(111)
-            ax.set_title("Vertical (Planar)")
-            ax.plot(v_ang, v_val, color='orange')
-            ax.set_xlabel("Angle [deg]")
-            ax.set_ylabel("Linear")
-            ax.grid(True, alpha=0.3)
+        ax = self.fig_v.add_subplot(111)
+        ax.set_title("Vertical (Planar)")
+        ax.plot(v_ang, v_val, color='orange')
+        ax.set_xlabel("Angle [deg]")
+        ax.set_ylabel("Linear")
+        ax.grid(True, alpha=0.3)
         self.canvas_v.draw()
 
-# ----------------------------- Helpers de exportaÃƒÂ§ÃƒÂ£o PAT ----------------------------- #
-def write_pat_vertical_new_format(path: str, description: str, gain: float, num_antennas: int, 
-                                angles: np.ndarray, values: np.ndarray, step: int = 1) -> None:
+# ----------------------------- Helpers de exportação PAT ----------------------------- #
+def write_pat_vertical_new_format(path: str, description: str, gain: float, num_antennas: int,
+                                  angles: np.ndarray, values: np.ndarray, step: int = 1) -> None:
     """Escreve arquivo PAT no novo formato para diagrama vertical"""
-    # Converter para dB (valores negativos)
     values_db = 20 * np.log10(np.maximum(values, 1e-10))
-    
-    # Criar ÃƒÂ¢ngulos de 0 a 360 com o passo especificado
     target_angles = np.arange(0, 361, step)
-    
-    # Para o diagrama vertical, vamos espelhar os dados
-    angles_0_180 = angles + 90  # Converter de -90~90 para 0~180
+
+    angles_0_180 = angles + 90
     values_0_180 = values_db
-    
-    # Espelhar para 180~360
     angles_180_360 = 360 - angles_0_180[::-1]
     values_180_360 = values_0_180[::-1]
-    
-    # Combinar
+
     all_angles = np.concatenate([angles_0_180, angles_180_360[1:]])
     all_values = np.concatenate([values_0_180, values_180_360[1:]])
-    
-    # Remover duplicatas e ordenar
     unique_angles, unique_indices = np.unique(all_angles, return_index=True)
     unique_values = all_values[unique_indices]
-    
-    # Interpolar para os ÃƒÂ¢ngulos alvo
-    final_values = np.interp(target_angles, unique_angles, unique_values, 
-                           left=unique_values[0], right=unique_values[-1])
-    
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f"'{description}',{gain:.2f},{num_antennas}\n")
-        for ang, val in zip(target_angles, final_values):
-            if ang <= 360:  # Garantir que nÃƒÂ£o ultrapasse 360
-                f.write(f"{int(ang)},{val:.2f}\n")
+    final_values = np.interp(
+        target_angles,
+        unique_angles,
+        unique_values,
+        left=unique_values[0],
+        right=unique_values[-1],
+    )
+
+    lines = [f"'{description}',{gain:.2f},{num_antennas}\n"]
+    for ang, val in zip(target_angles, final_values):
+        if ang <= 360:
+            lines.append(f"{int(ang)},{val:.2f}\n")
+    atomic_write_text(path, "".join(lines))
+
 
 def write_pat_horizontal_new_format(path: str, description: str, gain: float, num_antennas: int,
-                                  angles: np.ndarray, values: np.ndarray, step: int = 1) -> None:
+                                    angles: np.ndarray, values: np.ndarray, step: int = 1) -> None:
     """Escreve arquivo PAT no novo formato para diagrama horizontal"""
-    # Converter para dB (valores negativos)
     values_db = 20 * np.log10(np.maximum(values, 1e-10))
-    
-    # Criar ÃƒÂ¢ngulos de 0 a 360 com o passo especificado
     target_angles = np.arange(0, 361, step)
-    
-    # Converter ÃƒÂ¢ngulos de -180~180 para 0~360
+
     source_angles = (angles + 360) % 360
     order = np.argsort(source_angles)
     source_angles_sorted = source_angles[order]
     source_values_sorted = values_db[order]
-    
-    # Interpolar para os ÃƒÂ¢ngulos alvo
-    final_values = np.interp(target_angles, source_angles_sorted, source_values_sorted,
-                           period=360)
-    
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f"'{description}',{gain:.2f},{num_antennas}\n")
-        for ang, val in zip(target_angles, final_values):
-            f.write(f"{int(ang)},{val:.2f}\n")
+    final_values = np.interp(target_angles, source_angles_sorted, source_values_sorted, period=360)
 
-# ----------------------------- Helpers de exportaÃƒÂ§ÃƒÂ£o PRN ----------------------------- #
+    lines = [f"'{description}',{gain:.2f},{num_antennas}\n"]
+    for ang, val in zip(target_angles, final_values):
+        lines.append(f"{int(ang)},{val:.2f}\n")
+    atomic_write_text(path, "".join(lines))
+
+
+# ----------------------------- Helpers de exportação PRN ----------------------------- #
 def write_prn_file(path: str, name: str, make: str, frequency: float, freq_unit: str,
                   h_width: float, v_width: float, front_to_back: float, gain: float,
                   h_angles: np.ndarray, h_values: np.ndarray,
                   v_angles: np.ndarray, v_values: np.ndarray) -> None:
     """Escreve arquivo PRN no formato especificado (Attenuation dB)"""
-    
-    # Helper: Linear -> Attenuation dB (0 = Max, Non-Negative)
-    # Assumes values are Linear Normalized (0..1)
+
     def linear_to_atten_db(vals):
-        # Prevent log(0)
         safe_v = np.maximum(vals, 1e-10)
-        # Gain dB (negative for values < 1)
-        # Atten dB = -20*log10(v). Should be >= 0 since v <= 1.
         atten = -20.0 * np.log10(safe_v)
-        # Force non-negative to handle any minor float errors or >1 inputs
         return np.maximum(atten, 0.0)
 
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        # CabeÃƒÂ§alho
-        f.write(f"NAME {name}\n")
-        f.write(f"MAKE {make}\n")
-        f.write(f"FREQUENCY {frequency:.2f} {freq_unit}\n")
-        f.write(f"H_WIDTH {h_width:.2f}\n")
-        f.write(f"V_WIDTH {v_width:.2f}\n")
-        f.write(f"FRONT_TO_BACK {front_to_back:.2f}\n")
-        f.write(f"GAIN {gain:.2f} dBd\n") # Changed dBi to dBd as requested
-        f.write("TILT MECHANICAL\n")
-        
-        # Dados horizontais (0..359)
-        f.write("HORIZONTAL 360\n")
-        
-        # Prepare Horizontal Data (Atten dB)
-        h_atten = linear_to_atten_db(h_values)
-        
-        # Interpolate 0..359
-        h_ang_norm = (h_angles + 360) % 360
-        h_order = np.argsort(h_ang_norm)
-        h_ang_sorted = h_ang_norm[h_order]
-        h_val_sorted = h_atten[h_order]
-        
-        for i in range(360):
-            val = np.interp(i, h_ang_sorted, h_val_sorted, period=360)
-            f.write(f"{i}\t{val:.2f}\n")
-        
-        # Dados verticais (0..359)
-        f.write("VERTICAL 360\n")
-        
-        # Vertical Logic:
-        # User requirement: "Maximo vertical deve estar em 90 e 270 de forma simetrica".
-        # Input 'v_values' comes from 'resample_vertical', usually derived from 'parse_auto' or 'parse_hfss_csv'.
-        # Typical input: -90..90 or 0..180 (Theta). Often Peak is at 0 or 90.
-        # Deep3 VRP plots show Peak at 0 (Planar X axis).
-        
-        # Step 1: Find peak of input linear data
-        p_idx = np.argmax(v_values)
-        peak_input_angle = v_angles[p_idx]
-        
-        # Step 2: Create a 0..360 target array where Peak is at 90 and 270 (Symmetric)
-        # We will take the input pattern, shift it so Peak aligns to 90.
-        # And ensure symmetry (Mirror 90..270 to 270..90).
-        
-        # Shift input so Peak is at 0 first (center it)
-        v_angles_centered = v_angles - peak_input_angle
-        # Now Peak is at 0.
-        
-        # We want Peak at 90. So Target Angle = Centered Input + 90.
-        # Input = Target - 90.
-        
-        v_atten = linear_to_atten_db(v_values)
-        
-        for i in range(360):
-            # i is target angle (0..359)
-            
-            # Logic for Symmetry 90/270:
-            # Map i to a "distance from peak"
-            # Distance from 90: abs(i - 90)
-            # Distance from 270: abs(i - 270)
-            # We want the pattern to be symmetric around 90/270 axis? 
-            # Or usually Front=90, Back=270.
-            # If symmetric, Profile(90+delta) == Profile(90-delta).
-            # And Profile(270) copy of Profile(90)?
-            
-            # Use distance to nearest peak (90 or 270)
-            # dist_90 = min(abs(i - 90), 360 - abs(i-90)) # circular distance?
-            # Actually, standard "Symmetric Dipole" means 0..180 is identical to 180..360?
-            # Or 90 is max, 270 is max. 
-            # Let's assume the input pattern covers the "Main Lobe" adequately.
-            # We query the input pattern using offset from its peak.
-            
-            # Find angular distance from 90 (Front Peak) and 270 (Back Peak)
-            # We assume the input pattern shape defines the shape around BOTH peaks.
-            
-            # Normalize i to 0..360
-            angle_i = i % 360
-            
-            # Distance to 90
-            diff_90 = abs(angle_i - 90)
-            # Distance to 270
-            diff_270 = abs(angle_i - 270)
-            
-            # Use the smaller distance to determine "off-axis angle"
-            # This effectively makes 90 and 270 identical peaks.
-            min_diff = min(diff_90, diff_270)
-            
-            # Map this 'min_diff' to the input pattern's "off-axis" angle.
-            # Since input peak is at 0 (centered), we query: 0 + min_diff (if input has side lobes?)
-            # Or just query the input straight? 
-            # CAUTION: Input might be Asymmetric (e.g. Tilted). 
-            # But user said "SIMETRICA". So we force symmetry by using 'min_diff'.
-            # We query the input at 'peak_input_angle + min_diff' (or -min_diff, assuming symmetry of input?)
-            # Let's average the input value at +diff and -diff if possible to smooth?
-            # Simpler: Query input at (peak_input_angle + min_diff).
-            # This assumes input is defined for positive deviations from peak.
-            # If input is -90..90 centered at 0. Positive deviation covers 0..90 side.
-            
-            query_ang = peak_input_angle + min_diff
-            
-            # Interpolate
-            val = np.interp(query_ang, v_angles, v_atten)
-            
-            f.write(f"{i}\t{val:.2f}\n")
+    lines = []
+    lines.append(f"NAME {name}\n")
+    lines.append(f"MAKE {make}\n")
+    lines.append(f"FREQUENCY {frequency:.2f} {freq_unit}\n")
+    lines.append(f"H_WIDTH {h_width:.2f}\n")
+    lines.append(f"V_WIDTH {v_width:.2f}\n")
+    lines.append(f"FRONT_TO_BACK {front_to_back:.2f}\n")
+    lines.append(f"GAIN {gain:.2f} dBd\n")
+    lines.append("TILT MECHANICAL\n")
+
+    lines.append("HORIZONTAL 360\n")
+    h_atten = linear_to_atten_db(h_values)
+    h_ang_norm = (h_angles + 360) % 360
+    h_order = np.argsort(h_ang_norm)
+    h_ang_sorted = h_ang_norm[h_order]
+    h_val_sorted = h_atten[h_order]
+    for i in range(360):
+        val = np.interp(i, h_ang_sorted, h_val_sorted, period=360)
+        lines.append(f"{i}\t{val:.2f}\n")
+
+    lines.append("VERTICAL 360\n")
+    p_idx = np.argmax(v_values)
+    peak_input_angle = v_angles[p_idx]
+    v_atten = linear_to_atten_db(v_values)
+
+    for i in range(360):
+        angle_i = i % 360
+        diff_90 = abs(angle_i - 90)
+        diff_270 = abs(angle_i - 270)
+        min_diff = min(diff_90, diff_270)
+        query_ang = peak_input_angle + min_diff
+        val = np.interp(query_ang, v_angles, v_atten)
+        lines.append(f"{i}\t{val:.2f}\n")
+
+    atomic_write_text(path, "".join(lines))
 
 # ----------------------------- GUI ----------------------------- #
 ctk.set_appearance_mode("Dark")
@@ -1045,7 +1225,7 @@ ctk.set_appearance_mode("Dark")
 # ----------------------------- Database Manager ----------------------------- #
 class DatabaseManager:
     # Determine user data directory to avoid "Read-only file system" errors in Program Files
-    APP_DIR = os.path.join(os.path.expanduser("~"), ".eftx_converter")
+    APP_DIR = APP_USER_DIR
     if not os.path.exists(APP_DIR):
         os.makedirs(APP_DIR, exist_ok=True)
         
@@ -1152,17 +1332,12 @@ def write_pat_horizontal_rfs(path: str, name: str, gain: float, num: int,
     safe_vals = np.maximum(values, 1e-12)
     vals_db = 20 * np.log10(safe_vals)
     
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f"'{name}',{gain:.2f},{num}\n")
-        
-        # 360 degrees
-        target = np.arange(0, 360, 1)
-        # Interpolate
-        # Handle wrapping for interp
-        v_interp = np.interp(target, angles, vals_db, period=360)
-        
-        for i, val in zip(target, v_interp):
-            f.write(f"{int(i)},{val:.2f}\n")
+    lines = [f"'{name}',{gain:.2f},{num}\n"]
+    target = np.arange(0, 360, 1)
+    v_interp = np.interp(target, angles, vals_db, period=360)
+    for i, val in zip(target, v_interp):
+        lines.append(f"{int(i)},{val:.2f}\n")
+    atomic_write_text(path, "".join(lines))
 
 
 def write_pat_adt_format(path: str, description: str, angles: np.ndarray, values: np.ndarray,
@@ -1191,7 +1366,7 @@ def write_pat_adt_format(path: str, description: str, angles: np.ndarray, values
             norm="none"
         )
     else:
-        # Fallback por inferÃƒÂªncia do intervalo angular de entrada
+        # Fallback por inferência do intervalo angular de entrada
         a = np.asarray(angles, dtype=float)
         if np.nanmin(a) >= -90.0 and np.nanmax(a) <= 90.0:
             ang_out, val_out = _resample_vertical_adt(a, values)
@@ -1202,15 +1377,16 @@ def write_pat_adt_format(path: str, description: str, angles: np.ndarray, values
     m = np.max(val_out)
     vals_norm = val_out / (m if m > 0 else 1.0)
     
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f"Edited by Deep3\n")
-        f.write("98\n")
-        f.write("1\n")
-        f.write("0 0 0 1 0\n")
-        f.write("voltage\n")
-        
-        for a, v in zip(ang_out, vals_norm):
-            f.write(f"{a:.2f}\t{v:.4f}\t0\n")
+    lines = [
+        "Edited by Deep3\n",
+        "98\n",
+        "1\n",
+        "0 0 0 1 0\n",
+        "voltage\n",
+    ]
+    for a, v in zip(ang_out, vals_norm):
+        lines.append(f"{a:.2f}\t{v:.4f}\t0\n")
+    atomic_write_text(path, "".join(lines))
 
 
 def parse_rfs_pat_file(path: str) -> Tuple[np.ndarray, np.ndarray]:
@@ -1256,6 +1432,145 @@ def parse_rfs_pat_file(path: str) -> Tuple[np.ndarray, np.ndarray]:
 
 class RobustPatternParser:
     @staticmethod
+    def _median_step_deg(angles: np.ndarray) -> float:
+        a = np.asarray(angles, dtype=float).reshape(-1)
+        if a.size < 2:
+            return float("nan")
+        u = np.unique(np.sort(a))
+        if u.size < 2:
+            return float("nan")
+        d = np.diff(u)
+        d = d[np.isfinite(d) & (np.abs(d) > 1e-9)]
+        if d.size == 0:
+            return float("nan")
+        return float(np.median(np.abs(d)))
+
+    @staticmethod
+    def classify_type(path: str, angles: np.ndarray) -> Tuple[str, bool, List[str], dict]:
+        """
+        Classifica padrao em:
+          H = azimute (plot polar)
+          V = elevacao (plot planar)
+        Retorna: (tipo, ambiguo, motivos, estatisticas)
+        """
+        filename = os.path.basename(path)
+        up = filename.upper()
+        a = np.asarray(angles, dtype=float).reshape(-1)
+
+        stats = {
+            "n_points": int(a.size),
+            "angle_min": float("nan"),
+            "angle_max": float("nan"),
+            "angle_span": float("nan"),
+            "step_deg": float("nan"),
+            "score_h": 0.0,
+            "score_v": 0.0,
+        }
+        reasons: List[str] = []
+
+        if a.size == 0:
+            reasons.append("Sem amostras angulares.")
+            return "Unknown", True, reasons, stats
+
+        a_min = float(np.nanmin(a))
+        a_max = float(np.nanmax(a))
+        span = float(a_max - a_min)
+        step = RobustPatternParser._median_step_deg(a)
+        stats.update(
+            {
+                "angle_min": a_min,
+                "angle_max": a_max,
+                "angle_span": span,
+                "step_deg": step,
+            }
+        )
+
+        score_h = 0.0
+        score_v = 0.0
+
+        # 1) Evidencias por nome de arquivo
+        h_tokens = ["HORIZONTAL", "_HRP", "AZ", "_HPOL_HRP", "_HPOL"]
+        v_tokens = ["VERTICAL", "_VRP", "EL", "_VPOL_VRP", "_VPOL"]
+        has_h = any(tok in up for tok in h_tokens)
+        has_v = any(tok in up for tok in v_tokens)
+        if has_h:
+            score_h += 3.0
+            reasons.append("Nome sugere AZ/HRP.")
+        if has_v:
+            score_v += 3.0
+            reasons.append("Nome sugere EL/VRP.")
+        if has_h and has_v:
+            reasons.append("Nome contem pistas conflitantes (H e V).")
+
+        # 2) Evidencias por cabecalho textual
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                head_txt = "\n".join([next(f, "") for _ in range(8)]).upper()
+            head_has_h = "HORIZONTAL" in head_txt
+            head_has_v = "VERTICAL" in head_txt
+            if head_has_h and not head_has_v:
+                score_h += 4.0
+                reasons.append("Cabecalho indica HORIZONTAL.")
+            elif head_has_v and not head_has_h:
+                score_v += 4.0
+                reasons.append("Cabecalho indica VERTICAL.")
+            elif head_has_h and head_has_v:
+                score_h += 1.5
+                score_v += 1.5
+                reasons.append("Cabecalho contem HORIZONTAL e VERTICAL.")
+        except Exception:
+            pass
+
+        # 3) Evidencias pelo dominio angular
+        if -92.0 <= a_min <= 0.0 and 0.0 <= a_max <= 92.0 and span <= 185.0:
+            score_v += 5.0
+            reasons.append("Faixa angular tipica de elevacao (-90..90).")
+        if -2.0 <= a_min <= 2.0 and 170.0 <= a_max <= 182.0 and span <= 185.0:
+            score_v += 3.5
+            reasons.append("Faixa angular tipica de elevacao (0..180).")
+        if -182.0 <= a_min and a_max <= 182.0 and span >= 300.0:
+            score_h += 5.0
+            reasons.append("Faixa angular ampla tipica de azimute (-180..180).")
+        if -2.0 <= a_min <= 2.0 and 300.0 <= a_max <= 362.0 and span >= 300.0:
+            score_h += 4.0
+            reasons.append("Faixa angular ampla tipica de azimute (0..360).")
+
+        # 4) Evidencias por resolucao angular
+        if math.isfinite(step):
+            if step <= 0.15 and span <= 190.0:
+                score_v += 2.0
+                reasons.append("Passo fino (~0.1 deg) sugere elevacao.")
+            if 0.8 <= step <= 1.2 and span >= 300.0:
+                score_h += 2.0
+                reasons.append("Passo ~1 deg com 360 sugere azimute.")
+
+        stats["score_h"] = float(score_h)
+        stats["score_v"] = float(score_v)
+
+        if score_h <= 0.0 and score_v <= 0.0:
+            reasons.append("Nao houve evidencia suficiente para classificar.")
+            return "Unknown", True, reasons, stats
+
+        if score_h >= score_v:
+            ptype = "H"
+        else:
+            ptype = "V"
+
+        delta = abs(score_h - score_v)
+        strength = max(score_h, score_v)
+        partial_coverage = span < 150.0
+        conflicting_hints = has_h and has_v
+        ambiguous = (delta < 1.5) or (strength < 3.0) or partial_coverage or conflicting_hints
+        if partial_coverage:
+            reasons.append("Cobertura angular parcial (<150 deg): exige confirmacao.")
+        if conflicting_hints:
+            reasons.append("Pistas de nome conflitantes: exige confirmacao.")
+        if ambiguous:
+            reasons.append("Classificacao marcada como ambigua.")
+
+        return ptype, ambiguous, reasons, stats
+
+    @staticmethod
     def parse(path: str) -> List[dict]:
         """
         Parses a file and returns a list of patterns found.
@@ -1284,30 +1599,30 @@ class RobustPatternParser:
                 if len(data["h_values"]) > 0:
                     meta = {k: data[k] for k in ["NAME", "MAKE", "FREQUENCY", "GAIN"]}
                     meta.update(calc_meta("H", data["h_angles"], data["h_values"]))
+                    meta["ClassificationAmbiguous"] = False
+                    meta["ClassificationReasons"] = ["Secao HORIZONTAL do PRN."]
                     patterns.append({
                         "name": "Horizontal", "type": "H",
                         "angles": data["h_angles"], "values": data["h_values"], # Norm Linear
-                        "meta": meta
+                        "meta": meta,
+                        "classification_ambiguous": False,
+                        "classification_reasons": ["Secao HORIZONTAL do PRN."],
                     })
                 if len(data["v_values"]) > 0:
                     meta = {k: data[k] for k in ["NAME", "V_WIDTH", "TILT"]}
                     meta.update(calc_meta("V", data["v_angles"], data["v_values"]))
+                    meta["ClassificationAmbiguous"] = False
+                    meta["ClassificationReasons"] = ["Secao VERTICAL do PRN."]
                     patterns.append({
                         "name": "Vertical", "type": "V",
                         "angles": data["v_angles"], "values": data["v_values"],
-                        "meta": meta
+                        "meta": meta,
+                        "classification_ambiguous": False,
+                        "classification_reasons": ["Secao VERTICAL do PRN."],
                     })
                 return patterns 
 
             # 2. PAT/CSV/TXT/MSI/DAT
-            ptype = "Unknown"
-            if "HORIZONTAL" in filename.upper() or "_HRP" in filename.upper() or "AZ" in filename.upper() or "_HPOL_HRP" in filename.upper() or "_HPOL" in filename.upper():
-                if "_VRP" not in filename.upper(): # Ensure not VRP if HPOL is present
-                     ptype = "H"
-            
-            if "VERTICAL" in filename.upper() or "_VRP" in filename.upper() or "EL" in filename.upper() or "_VPOL_VRP" in filename.upper():
-                ptype = "V"
-                
             # SPECIAL CHECK: RFS PAT "voltage"
             is_rfs_pat = False
             try:
@@ -1346,12 +1661,19 @@ class RobustPatternParser:
                 
                 m = np.max(val)
                 val = val / (m if m > 0 else 1.0)
-                
+
+                ptype, ambiguous, reasons, cstats = RobustPatternParser.classify_type(path, ang)
+
                 meta = calc_meta(ptype, ang, val)
+                meta["ClassificationAmbiguous"] = bool(ambiguous)
+                meta["ClassificationReasons"] = reasons
+                meta["ClassificationStats"] = cstats
                 patterns.append({
                     "name": filename, "type": ptype,
                     "angles": ang, "values": val,
-                    "meta": meta
+                    "meta": meta,
+                    "classification_ambiguous": bool(ambiguous),
+                    "classification_reasons": reasons,
                 })
 
         except Exception as e:
@@ -1456,7 +1778,7 @@ class DiagramThumbnail(ctk.CTkFrame):
         p_idx = np.argmax(val)
         peak_ang = ang[p_idx]
         
-        txt = f"HPBW: {hpbw:.1f}Ã‚Â° | Peak: {peak_ang:.1f}Ã‚Â°"
+        txt = f"HPBW: {hpbw:.1f}° | Peak: {peak_ang:.1f}°"
         meta = self.pattern.get('meta', {})
         if "GAIN" in meta: txt += f"\nGain: {meta['GAIN']}"
         if "Ripple" in meta: txt += f"\nRipple: {meta['Ripple']}"
@@ -1472,9 +1794,14 @@ class DiagramThumbnail(ctk.CTkFrame):
 
 
 class DiagramsTab(ctk.CTkFrame):
-    def __init__(self, master, load_callback=None):
+    def __init__(self, master, load_callback=None, task_hooks: Optional[dict] = None):
         super().__init__(master)
         self.load_callback = load_callback
+        self.task_hooks = task_hooks or {}
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._import_cancel = threading.Event()
+        self._import_future = None
+        self._import_total = 0
         
         # Init DB
         DatabaseManager.init_db()
@@ -1487,8 +1814,18 @@ class DiagramsTab(ctk.CTkFrame):
         
         self.btn_refresh = ctk.CTkButton(self.top_bar, text="Recarregar Biblioteca", command=self.load_library)
         self.btn_refresh.pack(side="left", padx=5)
+
+        self.btn_cancel_import = ctk.CTkButton(
+            self.top_bar,
+            text="Cancelar Importacao",
+            command=self.cancel_import,
+            fg_color="#aa4444",
+            state="disabled",
+            width=140,
+        )
+        self.btn_cancel_import.pack(side="left", padx=5)
         
-        self.btn_clear = ctk.CTkButton(self.top_bar, text="Limpar VisualizaÃƒÂ§ÃƒÂ£o", command=self.clear_view, fg_color="gray")
+        self.btn_clear = ctk.CTkButton(self.top_bar, text="Limpar Visualização", command=self.clear_view, fg_color="gray")
         self.btn_clear.pack(side="right", padx=5)
         
         # --- Dual Scrollable Area ---
@@ -1527,6 +1864,40 @@ class DiagramsTab(ctk.CTkFrame):
 
         # Auto Load
         self.load_library()
+
+    def _confirm_pattern_type(self, source_path: str, pattern: dict) -> Optional[str]:
+        suggested = str(pattern.get("type", "Unknown")).upper()
+        if suggested not in ("H", "V"):
+            suggested = "Unknown"
+
+        suggested_txt = {
+            "H": "Azimute (H, plot polar)",
+            "V": "Elevacao (V, plot planar)",
+            "Unknown": "Indefinido",
+        }[suggested]
+
+        reasons = pattern.get("classification_reasons", [])
+        if not isinstance(reasons, list):
+            reasons = []
+        reasons_txt = ""
+        if reasons:
+            top = reasons[:5]
+            reasons_txt = "\n\nEvidencias:\n- " + "\n- ".join(str(x) for x in top)
+
+        msg = (
+            f"Arquivo: {os.path.basename(source_path)}\n"
+            f"Padrao: {pattern.get('name', os.path.basename(source_path))}\n"
+            f"Classificacao automatica: {suggested_txt}\n\n"
+            "Selecione o tipo correto:\n"
+            "SIM = Azimute (H, polar)\n"
+            "NAO = Elevacao (V, planar)\n"
+            "Cancelar = Ignorar este padrao."
+            f"{reasons_txt}"
+        )
+        ans = messagebox.askyesnocancel("Confirmar tipo do diagrama", msg)
+        if ans is None:
+            return None
+        return "H" if ans else "V"
         
     def _on_inner_frame_configure(self, event):
         # Update scrollregion to fit inner frame
@@ -1575,24 +1946,146 @@ class DiagramsTab(ctk.CTkFrame):
             row = idx // self.grid_cols
             col = idx % self.grid_cols
             thumb.grid(row=row, column=col, padx=10, pady=10)
-            
+
+    def _task_start(self, label: str, total: int = 0):
+        cb = self.task_hooks.get("start")
+        if callable(cb):
+            cb(label, total)
+
+    def _task_progress(self, current: int, total: int, label: str):
+        cb = self.task_hooks.get("progress")
+        if callable(cb):
+            cb(current, total, label)
+
+    def _task_finish(self, label: str):
+        cb = self.task_hooks.get("finish")
+        if callable(cb):
+            cb(label)
+
+    def _is_task_cancelled(self) -> bool:
+        if self._import_cancel.is_set():
+            return True
+        cb = self.task_hooks.get("is_cancelled")
+        if callable(cb):
+            try:
+                return bool(cb())
+            except Exception:
+                return self._import_cancel.is_set()
+        return False
+
+    def _collect_patterns_worker(self, files: List[str]) -> dict:
+        total = len(files)
+        out = {"records": [], "cancelled": False, "errors": []}
+        for i, f in enumerate(files, start=1):
+            if self._is_task_cancelled():
+                out["cancelled"] = True
+                break
+            try:
+                pats = RobustPatternParser.parse(f)
+                for p in pats:
+                    try:
+                        if len(p.get("values", [])) > 0:
+                            out["records"].append((f, p))
+                    except Exception:
+                        continue
+            except Exception as e:
+                out["errors"].append(f"{os.path.basename(f)}: {e}")
+            self._task_progress(i, total, f"Importando {i}/{total}: {os.path.basename(f)}")
+        return out
+
+    def _set_import_running(self, running: bool):
+        self.btn_add.configure(state="disabled" if running else "normal")
+        self.btn_refresh.configure(state="disabled" if running else "normal")
+        self.btn_cancel_import.configure(state="normal" if running else "disabled")
+
     def add_files(self):
         files = filedialog.askopenfilenames(title="Selecione Arquivos", 
                                             filetypes=[("All Files", "*.*"), ("PRN", "*.prn"), ("PAT", "*.pat"), ("CSV", "*.csv")])
-        if not files: return
-        
+        if not files:
+            return
+        if self._import_future and not self._import_future.done():
+            messagebox.showwarning("Importacao em andamento", "Aguarde a importacao atual terminar.")
+            return
+
+        self._import_total = len(files)
+        self._import_cancel.clear()
+        self._set_import_running(True)
+        self._task_start("Importacao de diagramas", self._import_total)
+        self._task_progress(0, self._import_total, "Iniciando importacao...")
+
+        self._import_future = self._executor.submit(self._collect_patterns_worker, list(files))
+
+        def _poll():
+            if not self._import_future:
+                return
+            if self._import_future.done():
+                self._finalize_import()
+                return
+            self.after(120, _poll)
+
+        self.after(120, _poll)
+
+    def cancel_import(self):
+        self._import_cancel.set()
+        self._task_progress(0, max(1, self._import_total), "Cancelando importacao...")
+
+    def _finalize_import(self):
+        future = self._import_future
+        self._import_future = None
+        self._set_import_running(False)
+        if future is None:
+            self._task_finish("Importacao finalizada.")
+            return
+
+        try:
+            result = future.result()
+        except Exception as e:
+            LOGGER.exception("Falha na importacao em lote.")
+            self._task_finish("Falha na importacao.")
+            messagebox.showerror("Erro", f"Falha na importacao: {e}")
+            return
+
+        records = result.get("records", [])
+        cancelled = bool(result.get("cancelled", False))
+        errors = result.get("errors", [])
+
         count = 0
-        for f in files:
-            pats = RobustPatternParser.parse(f)
-            for p in pats:
-                if len(p['values']) > 0:
-                    # Save to DB
-                    DatabaseManager.add_diagram(p)
-                    count += 1
-        
+        skipped = 0
+        total_records = len(records)
+        for idx, (f, p) in enumerate(records, start=1):
+            ptype = str(p.get("type", "Unknown")).upper()
+            is_ambiguous = bool(p.get("classification_ambiguous", False)) or (ptype not in ("H", "V"))
+            if is_ambiguous:
+                user_type = self._confirm_pattern_type(f, p)
+                if user_type is None:
+                    skipped += 1
+                    continue
+                p["type"] = user_type
+                p["classification_ambiguous"] = False
+                meta = p.get("meta", {})
+                if not isinstance(meta, dict):
+                    meta = {}
+                meta["TypeConfirmedByUser"] = user_type
+                meta["ClassificationAmbiguous"] = False
+                p["meta"] = meta
+            DatabaseManager.add_diagram(p)
+            count += 1
+            self._task_progress(idx, max(1, total_records), f"Gravando {idx}/{total_records}...")
+
         if count > 0:
             self.load_library()
-            messagebox.showinfo("Sucesso", f"{count} diagramas importados para a biblioteca.")
+
+        msg = f"{count} diagramas importados."
+        if skipped:
+            msg += f" {skipped} ignorados."
+        if errors:
+            msg += f" {len(errors)} com erro de leitura."
+        if cancelled:
+            msg += " Operacao cancelada."
+
+        self._task_finish(msg)
+        if count > 0 or skipped > 0 or errors:
+            messagebox.showinfo("Importacao concluida", msg)
     
     def load_library(self):
         self.clear_view()
@@ -1659,6 +2152,14 @@ class PATConverterApp(ctk.CTk):
         self.study_v2_angles = None; self.study_v2_vals = None
         self.study_sources = {"H1": "", "V1": "", "H2": "", "V2": ""}
         self.study_widgets = {}
+        self.project_file_path: Optional[str] = None
+        self.autosave_path = os.path.join(APP_USER_DIR, "autosave.eftxproj.json")
+        self.h_file_interactor = None
+        self.v_file_interactor = None
+        self.export_executor = ThreadPoolExecutor(max_workers=1)
+        self.export_future = None
+        self._wizard_lock = threading.Lock()
+        self._wizard_progress = {"current": 0, "total": 1, "label": "Pronto"}
 
         # Tabview (6 abas)
         self.tabs = ctk.CTkTabview(self)
@@ -1678,13 +2179,41 @@ class PATConverterApp(ctk.CTk):
         self._build_tab_project()
         
         # Build Diagram Tab with Callback
-        self.diagrams_view = DiagramsTab(self.tab_diag, load_callback=self.load_from_library)
+        self.task_cancel_event = threading.Event()
+        self.diagrams_view = DiagramsTab(
+            self.tab_diag,
+            load_callback=self.load_from_library,
+            task_hooks={
+                "start": self._task_ui_start,
+                "progress": self._task_ui_progress,
+                "finish": self._task_ui_finish,
+                "is_cancelled": self._task_ui_is_cancelled,
+            },
+        )
         self.diagrams_view.pack(fill="both", expand=True)
 
-        # Status
-        self.status = ctk.CTkLabel(self, text="Pronto.")
-        self.status.pack(side=ctk.BOTTOM, fill=ctk.X, padx=12, pady=8)
+        # Status + progress
+        self.status_bar = ctk.CTkFrame(self, fg_color="transparent")
+        self.status_bar.pack(side=ctk.BOTTOM, fill=ctk.X, padx=12, pady=8)
+        self.status = ctk.CTkLabel(self.status_bar, text="Pronto.")
+        self.status.pack(side=ctk.LEFT, fill=ctk.X, expand=True)
+        self.task_progress = ctk.CTkProgressBar(self.status_bar, width=220)
+        self.task_progress.set(0.0)
+        self.task_progress.pack(side=ctk.RIGHT, padx=8)
+        self.task_cancel_btn = ctk.CTkButton(
+            self.status_bar,
+            text="Cancelar",
+            width=90,
+            fg_color="#aa4444",
+            command=self._task_ui_cancel,
+            state="disabled",
+        )
+        self.task_cancel_btn.pack(side=ctk.RIGHT, padx=6)
+        self._build_menubar()
+        self._bind_shortcuts()
         self._refresh_project_overview()
+        self._try_recover_autosave()
+        self.after(30_000, self._autosave_tick)
 
     def _build_header(self):
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -1711,6 +2240,770 @@ class PATConverterApp(ctk.CTk):
         
         # Help Button
         ctk.CTkButton(header, text="Ajuda / Workflow", command=self.show_help, width=120, fg_color="#444444").pack(side="right", padx=10)
+
+    def _build_menubar(self):
+        menubar = tk.Menu(self)
+
+        m_file = tk.Menu(menubar, tearoff=0)
+        m_file.add_command(label="New Project", accelerator="Ctrl+N", command=self.project_new)
+        m_file.add_command(label="Open Project...", accelerator="Ctrl+O", command=self.project_open)
+        m_file.add_command(label="Save Project", accelerator="Ctrl+S", command=self.project_save)
+        m_file.add_command(label="Save Project As...", accelerator="Ctrl+Shift+S", command=self.project_save_as)
+        m_file.add_separator()
+        m_file.add_command(label="Load VRP...", accelerator="Ctrl+1", command=self.load_vertical)
+        m_file.add_command(label="Load HRP...", accelerator="Ctrl+2", command=self.load_horizontal)
+        m_file.add_command(label="Import Batch...", accelerator="Ctrl+I", command=self.batch_import)
+        m_file.add_separator()
+        m_file.add_command(label="Export PAT (All)", accelerator="Ctrl+E", command=self.export_all_pat)
+        m_file.add_command(label="Export PRN (All)", accelerator="Ctrl+P", command=self.export_all_prn)
+        m_file.add_separator()
+        m_file.add_command(label="Exit", accelerator="Alt+F4", command=self.quit)
+        menubar.add_cascade(label="File", menu=m_file)
+
+        m_edit = tk.Menu(menubar, tearoff=0)
+        m_edit.add_command(label="Copy Measurement", accelerator="Ctrl+C", command=self.copy_measurement)
+        m_edit.add_separator()
+        m_edit.add_command(label="Preferences...", accelerator="Ctrl+,", command=self.open_preferences)
+        menubar.add_cascade(label="Edit", menu=m_edit)
+
+        m_view = tk.Menu(menubar, tearoff=0)
+        m_view.add_command(label="Reset View", accelerator="R", command=self.view_reset)
+        m_view.add_command(label="Toggle Grid", accelerator="G", command=self.view_toggle_grid)
+        m_view.add_separator()
+        m_view.add_command(label="Show Log", accelerator="Ctrl+L", command=self.open_log_window)
+        menubar.add_cascade(label="View", menu=m_view)
+
+        m_tools = tk.Menu(menubar, tearoff=0)
+        m_tools.add_command(label="Null Fill Wizard...", accelerator="Ctrl+W", command=self.open_null_fill_wizard)
+        m_tools.add_command(label="Export Wizard...", accelerator="Ctrl+Shift+E", command=self.open_export_wizard)
+        m_tools.add_command(label="Validate PRN/PAT...", command=self.open_validator)
+        menubar.add_cascade(label="Tools", menu=m_tools)
+
+        m_window = tk.Menu(menubar, tearoff=0)
+        m_window.add_command(label="Go to Arquivo", accelerator="Alt+1", command=lambda: self.tabs.set("Arquivo"))
+        m_window.add_command(label="Go to Composicao Vertical", accelerator="Alt+2", command=lambda: self.tabs.set("Composicao Vertical"))
+        m_window.add_command(label="Go to Composicao Horizontal", accelerator="Alt+3", command=lambda: self.tabs.set("Composicao Horizontal"))
+        m_window.add_command(label="Go to Estudo Completo", accelerator="Alt+4", command=lambda: self.tabs.set("Estudo Completo"))
+        m_window.add_command(label="Go to Diagramas", accelerator="Alt+5", command=lambda: self.tabs.set("Diagramas (Batch)"))
+        menubar.add_cascade(label="Window", menu=m_window)
+
+        m_help = tk.Menu(menubar, tearoff=0)
+        m_help.add_command(label="Workflow / Help", command=self.show_help)
+        m_help.add_command(label="About", command=self.show_about)
+        menubar.add_cascade(label="Help", menu=m_help)
+
+        self.config(menu=menubar)
+        self.menubar = menubar
+
+    def _bind_shortcuts(self):
+        self.bind_all("<Control-n>", lambda e: self.project_new())
+        self.bind_all("<Control-o>", lambda e: self.project_open())
+        self.bind_all("<Control-s>", lambda e: self.project_save())
+        self.bind_all("<Control-Shift-S>", lambda e: self.project_save_as())
+        self.bind_all("<Control-1>", lambda e: self.load_vertical())
+        self.bind_all("<Control-2>", lambda e: self.load_horizontal())
+        self.bind_all("<Control-i>", lambda e: self.batch_import())
+        self.bind_all("<Control-e>", lambda e: self.export_all_pat())
+        self.bind_all("<Control-Shift-E>", lambda e: self.open_export_wizard())
+        self.bind_all("<Control-p>", lambda e: self.export_all_prn())
+        self.bind_all("<Control-l>", lambda e: self.open_log_window())
+        self.bind_all("<Control-w>", lambda e: self.open_null_fill_wizard())
+        self.bind_all("<Control-c>", lambda e: self.copy_measurement())
+        self.bind_all("<Control-comma>", lambda e: self.open_preferences())
+        self.bind_all("<KeyPress-g>", lambda e: self.view_toggle_grid())
+        self.bind_all("<KeyPress-r>", lambda e: self.view_reset())
+        self.bind_all("<Alt-KeyPress-1>", lambda e: self.tabs.set("Arquivo"))
+        self.bind_all("<Alt-KeyPress-2>", lambda e: self.tabs.set("Composicao Vertical"))
+        self.bind_all("<Alt-KeyPress-3>", lambda e: self.tabs.set("Composicao Horizontal"))
+        self.bind_all("<Alt-KeyPress-4>", lambda e: self.tabs.set("Estudo Completo"))
+        self.bind_all("<Alt-KeyPress-5>", lambda e: self.tabs.set("Diagramas (Batch)"))
+
+    def _task_ui_start(self, label: str, total: int = 0):
+        self.task_cancel_event.clear()
+        self.task_progress.set(0.0)
+        self.task_cancel_btn.configure(state="normal")
+        self._set_status(label)
+
+    def _task_ui_progress(self, current: int, total: int, label: str):
+        den = max(int(total), 1)
+        num = max(0, min(int(current), den))
+        self.task_progress.set(float(num) / float(den))
+        self._set_status(label)
+
+    def _task_ui_finish(self, label: str):
+        self.task_cancel_btn.configure(state="disabled")
+        self.task_progress.set(0.0)
+        self.task_cancel_event.clear()
+        self._set_status(label)
+
+    def _task_ui_cancel(self):
+        self.task_cancel_event.set()
+        self._set_status("Cancelamento solicitado...")
+
+    def _task_ui_is_cancelled(self) -> bool:
+        return self.task_cancel_event.is_set()
+
+    def project_new(self):
+        if not messagebox.askyesno("Novo projeto", "Limpar estado atual e iniciar novo projeto?"):
+            return
+        self.clear_all()
+        self.project_file_path = None
+        self.export_registry = []
+        self._refresh_project_overview()
+        self._set_status("Novo projeto iniciado.")
+
+    def _save_project_to_path(self, path: str):
+        data = self._collect_project_state()
+        atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+        self.project_file_path = path
+        self._set_status(f"Projeto salvo: {path}")
+
+    def project_save(self):
+        if self.project_file_path:
+            try:
+                self._save_project_to_path(self.project_file_path)
+                return
+            except Exception:
+                LOGGER.exception("Falha ao salvar projeto em caminho atual.")
+        self.project_save_as()
+
+    def project_save_as(self):
+        path = filedialog.asksaveasfilename(
+            title="Salvar projeto como",
+            defaultextension=".eftxproj.json",
+            filetypes=[("Projeto EFTX", "*.eftxproj.json"), ("JSON", "*.json"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            self._save_project_to_path(path)
+        except Exception as e:
+            LOGGER.exception("Falha ao salvar projeto.")
+            messagebox.showerror("Erro ao salvar", str(e))
+
+    def project_open(self):
+        path = filedialog.askopenfilename(
+            title="Abrir projeto",
+            filetypes=[("Projeto EFTX", "*.eftxproj.json"), ("JSON", "*.json"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Formato invalido de arquivo de projeto.")
+            self._apply_project_state(data)
+            self.project_file_path = path
+            self._set_status(f"Projeto carregado: {path}")
+        except Exception as e:
+            LOGGER.exception("Falha ao abrir projeto.")
+            messagebox.showerror("Erro ao abrir projeto", str(e))
+
+    def batch_import(self):
+        self.tabs.set("Diagramas (Batch)")
+        self.diagrams_view.add_files()
+
+    def view_reset(self):
+        self._refresh_v_plot()
+        self._refresh_h_plot()
+        if self.h_file_interactor:
+            self.h_file_interactor.reset_view()
+        if self.v_file_interactor:
+            self.v_file_interactor.reset_view()
+        self._set_status("Visualizacao resetada.")
+
+    def view_toggle_grid(self):
+        changed = False
+        for ax in (getattr(self, "ax_v1", None), getattr(self, "ax_h1", None)):
+            if ax is None:
+                continue
+            try:
+                visible = True
+                gl = ax.get_xgridlines() + ax.get_ygridlines()
+                if gl:
+                    visible = not gl[0].get_visible()
+                ax.grid(visible, alpha=0.3)
+                changed = True
+            except Exception:
+                continue
+        if changed:
+            self.canvas_v1.draw_idle()
+            self.canvas_h1.draw_idle()
+            self._set_status("Grade atualizada.")
+
+    def open_null_fill_wizard(self):
+        self.tabs.set("Composicao Vertical")
+        messagebox.showinfo(
+            "Null Fill Wizard",
+            "Configure modo (amplitude/phase/both), nulo alvo e percentual na aba Composicao Vertical.",
+        )
+
+    def open_export_wizard(self):
+        if self.export_future and not self.export_future.done():
+            messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
+            return
+
+        w = ctk.CTkToplevel(self)
+        w.title("Export Wizard")
+        w.geometry("560x460")
+
+        root_row = ctk.CTkFrame(w, fg_color="transparent")
+        root_row.pack(fill="x", padx=10, pady=(10, 6))
+        ctk.CTkLabel(root_row, text="Pasta de saida:", width=120, anchor="w").pack(side="left")
+        out_var = tk.StringVar(value=self.output_dir or os.getcwd())
+        out_entry = ctk.CTkEntry(root_row, textvariable=out_var)
+        out_entry.pack(side="left", fill="x", expand=True, padx=6)
+        ctk.CTkButton(root_row, text="...", width=40, command=lambda: out_var.set(filedialog.askdirectory(title="Escolha pasta de saida") or out_var.get())).pack(side="left")
+
+        pref_row = ctk.CTkFrame(w, fg_color="transparent")
+        pref_row.pack(fill="x", padx=10, pady=6)
+        ctk.CTkLabel(pref_row, text="Prefixo:", width=120, anchor="w").pack(side="left")
+        prefix_var = tk.StringVar(value=self._project_base_name())
+        ctk.CTkEntry(pref_row, textvariable=prefix_var).pack(side="left", fill="x", expand=True, padx=6)
+
+        checks = ctk.CTkFrame(w)
+        checks.pack(fill="both", expand=True, padx=10, pady=8)
+        ctk.CTkLabel(checks, text="Saidas", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(8, 6))
+
+        opt_graph = tk.BooleanVar(value=True)
+        opt_table = tk.BooleanVar(value=True)
+        opt_pat = tk.BooleanVar(value=True)
+        opt_adt = tk.BooleanVar(value=True)
+        opt_prn = tk.BooleanVar(value=True)
+        opt_harness = tk.BooleanVar(value=False)
+
+        ctk.CTkCheckBox(checks, text="Graficos PNG", variable=opt_graph).pack(anchor="w", padx=10, pady=3)
+        ctk.CTkCheckBox(checks, text="Tabelas PNG", variable=opt_table).pack(anchor="w", padx=10, pady=3)
+        ctk.CTkCheckBox(checks, text="Arquivos PAT", variable=opt_pat).pack(anchor="w", padx=10, pady=3)
+        ctk.CTkCheckBox(checks, text="Arquivos PAT ADT", variable=opt_adt).pack(anchor="w", padx=10, pady=3)
+        ctk.CTkCheckBox(checks, text="Arquivos PRN", variable=opt_prn).pack(anchor="w", padx=10, pady=3)
+        ctk.CTkCheckBox(checks, text="Harness null fill (CSV/JSON/PNG)", variable=opt_harness).pack(anchor="w", padx=10, pady=3)
+
+        run_row = ctk.CTkFrame(w, fg_color="transparent")
+        run_row.pack(fill="x", padx=10, pady=(0, 10))
+
+        def _start():
+            out_dir = out_var.get().strip()
+            prefix = prefix_var.get().strip() or self._project_base_name()
+            if not out_dir:
+                messagebox.showwarning("Dados faltando", "Defina a pasta de saida.")
+                return
+            selected = {
+                "graph": bool(opt_graph.get()),
+                "table": bool(opt_table.get()),
+                "pat": bool(opt_pat.get()),
+                "adt": bool(opt_adt.get()),
+                "prn": bool(opt_prn.get()),
+                "harness": bool(opt_harness.get()),
+            }
+            if not any(selected.values()):
+                messagebox.showwarning("Sem saidas", "Selecione ao menos uma saida.")
+                return
+            w.destroy()
+            self._run_export_wizard_async(out_dir, prefix, selected)
+
+        ctk.CTkButton(run_row, text="Iniciar Exportacao", fg_color="#22aa66", command=_start).pack(side="right", padx=4)
+        ctk.CTkButton(run_row, text="Cancelar", fg_color="#666666", command=w.destroy).pack(side="right", padx=4)
+
+    def _validate_cut(self, kind: str, angles: np.ndarray, values: np.ndarray) -> dict:
+        k = str(kind).upper()
+        a = np.asarray(angles, dtype=float).reshape(-1)
+        v = np.asarray(values, dtype=float).reshape(-1)
+        errors = []
+        warnings = []
+
+        if a.size == 0 or v.size == 0:
+            errors.append("Sem amostras.")
+            return {"kind": k, "errors": errors, "warnings": warnings, "summary": {}}
+        if a.size != v.size:
+            errors.append("Tamanho de angulos difere de valores.")
+            return {"kind": k, "errors": errors, "warnings": warnings, "summary": {}}
+        if not np.isfinite(a).all() or not np.isfinite(v).all():
+            errors.append("Existem NaN/Inf nos dados.")
+        if len(a) < 32:
+            warnings.append(f"Baixo numero de pontos ({len(a)}).")
+
+        amin = float(np.min(a))
+        amax = float(np.max(a))
+        span = amax - amin
+        step = _estimate_step_deg(a)
+        vmax = float(np.max(v))
+        vmin = float(np.min(v))
+        monotonic = bool(np.all(np.diff(a) >= -1e-9))
+        if not monotonic:
+            warnings.append("Angulos nao monotonicos (sera ordenado internamente para varias operacoes).")
+        if vmax <= 0:
+            errors.append("Amplitude maxima invalida (<=0).")
+        if vmin < -1e-6:
+            warnings.append("Foram detectados valores negativos em amplitude linear.")
+
+        if k == "H":
+            if span < 300:
+                warnings.append(f"Cobertura angular horizontal parcial ({span:.1f} deg).")
+            if amin < -181 or amax > 361:
+                warnings.append(f"Faixa angular horizontal incomum [{amin:.1f},{amax:.1f}].")
+        elif k == "V":
+            if amin < -92 or amax > 182:
+                warnings.append(f"Faixa angular vertical incomum [{amin:.1f},{amax:.1f}].")
+            if span > 200:
+                warnings.append(f"Cobertura vertical muito ampla ({span:.1f} deg).")
+
+        summary = {
+            "points": int(a.size),
+            "angle_min": amin,
+            "angle_max": amax,
+            "span": span,
+            "step_deg": float(step) if math.isfinite(step) else float("nan"),
+            "value_min": vmin,
+            "value_max": vmax,
+        }
+        return {"kind": k, "errors": errors, "warnings": warnings, "summary": summary}
+
+    def _open_validation_report_window(self, title: str, text: str):
+        w = ctk.CTkToplevel(self)
+        w.title(title)
+        w.geometry("980x620")
+        box = ctk.CTkTextbox(w, wrap="none")
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+        box.insert("0.0", text)
+        box.see("0.0")
+        box.configure(state="disabled")
+
+    def open_validator(self):
+        path = filedialog.askopenfilename(
+            title="Validar arquivo PRN/PAT/CSV/TXT",
+            filetypes=[
+                ("Arquivos de Diagrama", "*.prn *.pat *.csv *.tsv *.txt *.dat"),
+                ("Todos os Arquivos", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        lines = [
+            "=== RELATORIO DE VALIDACAO ===",
+            f"Arquivo: {path}",
+            "",
+        ]
+        findings = 0
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            cuts = []
+            if ext == ".prn":
+                data = parse_prn(path)
+                if len(data.get("h_angles", [])) > 0:
+                    cuts.append(("H", np.asarray(data["h_angles"], dtype=float), np.asarray(data["h_values"], dtype=float), "PRN/HORIZONTAL"))
+                if len(data.get("v_angles", [])) > 0:
+                    cuts.append(("V", np.asarray(data["v_angles"], dtype=float), np.asarray(data["v_values"], dtype=float), "PRN/VERTICAL"))
+            else:
+                pats = RobustPatternParser.parse(path)
+                if pats:
+                    for p in pats:
+                        cuts.append((
+                            str(p.get("type", "Unknown")).upper(),
+                            np.asarray(p.get("angles", []), dtype=float),
+                            np.asarray(p.get("values", []), dtype=float),
+                            str(p.get("name", "pattern")),
+                        ))
+                else:
+                    a, v = parse_auto(path)
+                    ctype, amb, reasons, _ = RobustPatternParser.classify_type(path, a)
+                    label = f"AUTO ({ctype}{' amb' if amb else ''})"
+                    cuts.append((ctype, np.asarray(a, dtype=float), np.asarray(v, dtype=float), label))
+                    if amb:
+                        lines.append("Aviso: classificacao automatica ambigua.")
+                        if reasons:
+                            lines.extend([f" - {r}" for r in reasons[:6]])
+                        lines.append("")
+
+            if not cuts:
+                lines.append("ERRO: nenhum corte valido encontrado.")
+                self._open_validation_report_window("Validador", "\n".join(lines))
+                return
+
+            for idx, (kind, a, v, label) in enumerate(cuts, start=1):
+                res = self._validate_cut(kind, a, v)
+                s = res["summary"]
+                lines.append(f"[{idx}] {label} | tipo={res['kind']}")
+                if s:
+                    step_txt = f"{s['step_deg']:.4f}" if math.isfinite(float(s["step_deg"])) else "-"
+                    lines.append(
+                        f"  pontos={s['points']} | faixa={s['angle_min']:.2f}..{s['angle_max']:.2f} "
+                        f"| span={s['span']:.2f} | passo={step_txt}"
+                    )
+                    lines.append(
+                        f"  valores={s['value_min']:.6f}..{s['value_max']:.6f}"
+                    )
+                if res["errors"]:
+                    findings += len(res["errors"])
+                    for e in res["errors"]:
+                        lines.append(f"  ERRO: {e}")
+                if res["warnings"]:
+                    findings += len(res["warnings"])
+                    for w in res["warnings"]:
+                        lines.append(f"  WARN: {w}")
+                if not res["errors"] and not res["warnings"]:
+                    lines.append("  OK: sem inconsistencias detectadas.")
+                lines.append("")
+
+            lines.append(f"Total de achados (ERRO+WARN): {findings}")
+            if findings == 0:
+                self._set_status("Validacao concluida: sem inconsistencias.")
+            else:
+                self._set_status(f"Validacao concluida: {findings} achados.")
+        except Exception as e:
+            LOGGER.exception("Falha no validador.")
+            lines.append(f"ERRO FATAL: {e}")
+            self._set_status("Falha na validacao.")
+
+        self._open_validation_report_window("Validador PRN/PAT/CSV", "\n".join(lines))
+
+    def _wizard_set_progress(self, current: int, total: int, label: str):
+        with self._wizard_lock:
+            self._wizard_progress = {
+                "current": max(0, int(current)),
+                "total": max(1, int(total)),
+                "label": str(label),
+            }
+
+    def _wizard_get_progress(self) -> dict:
+        with self._wizard_lock:
+            return dict(self._wizard_progress)
+
+    def _run_export_wizard_async(self, out_dir: str, prefix: str, selected: dict):
+        if self.export_future and not self.export_future.done():
+            messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
+            return
+
+        safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", prefix.strip() or self._project_base_name())
+        root = os.path.join(out_dir, f"{safe_prefix}_wizard_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        os.makedirs(root, exist_ok=True)
+
+        job = {
+            "root": root,
+            "prefix": safe_prefix,
+            "selected": dict(selected),
+        }
+        self.task_cancel_event.clear()
+        self._wizard_set_progress(0, 1, "Iniciando exportacao...")
+        self._task_ui_start("Export Wizard: iniciando...", 1)
+        self.export_future = self.export_executor.submit(self._export_wizard_worker, job)
+        self._poll_export_wizard()
+
+    def _poll_export_wizard(self):
+        if not self.export_future:
+            return
+        p = self._wizard_get_progress()
+        self._task_ui_progress(p.get("current", 0), p.get("total", 1), p.get("label", "Executando..."))
+        if self.export_future.done():
+            self._finalize_export_wizard()
+            return
+        self.after(140, self._poll_export_wizard)
+
+    def _finalize_export_wizard(self):
+        fut = self.export_future
+        self.export_future = None
+        if fut is None:
+            self._task_ui_finish("Export Wizard finalizado.")
+            return
+        try:
+            res = fut.result()
+        except Exception as e:
+            LOGGER.exception("Falha no Export Wizard.")
+            self._task_ui_finish("Falha no Export Wizard.")
+            messagebox.showerror("Erro", f"Falha no Export Wizard: {e}")
+            return
+
+        exported = res.get("exported", [])
+        warnings = res.get("warnings", [])
+        cancelled = bool(res.get("cancelled", False))
+        root = res.get("root", "")
+        manifest_json = res.get("manifest_json", "")
+        manifest_csv = res.get("manifest_csv", "")
+
+        for item in exported:
+            try:
+                self._register_export(item.get("path", ""), item.get("kind", "WIZARD_EXPORT"))
+            except Exception:
+                continue
+
+        status = f"Export Wizard concluido: {len(exported)} arquivo(s)."
+        if cancelled:
+            status += " Operacao cancelada."
+        self._task_ui_finish(status)
+
+        msg = [status]
+        if root:
+            msg.append(f"Pasta: {root}")
+        if manifest_json:
+            msg.append(f"Manifesto JSON: {manifest_json}")
+        if manifest_csv:
+            msg.append(f"Manifesto CSV: {manifest_csv}")
+        if warnings:
+            msg.append("")
+            msg.append(f"Avisos ({len(warnings)}):")
+            msg.extend([f"- {w}" for w in warnings[:10]])
+        messagebox.showinfo("Export Wizard", "\n".join(msg))
+
+    def _export_wizard_worker(self, job: dict) -> dict:
+        root = job.get("root", os.getcwd())
+        prefix = job.get("prefix", self._project_base_name())
+        selected = job.get("selected", {})
+        warnings = []
+        exported = []
+        cancelled = False
+
+        patterns = self._collect_project_patterns()
+        pairs = self._collect_project_prn_pairs()
+        do_harness = bool(selected.get("harness", False))
+        has_harness = self.vert_synth_result is not None and self.vert_harness is not None
+        if do_harness and not has_harness:
+            warnings.append("Harness solicitado, mas null fill/harness nao estao disponiveis.")
+
+        total_steps = 0
+        if selected.get("graph"):
+            total_steps += len(patterns)
+        if selected.get("table"):
+            total_steps += len(patterns)
+        if selected.get("pat"):
+            total_steps += len(patterns)
+        if selected.get("adt"):
+            total_steps += len(patterns)
+        if selected.get("prn"):
+            total_steps += len(pairs)
+        if do_harness and has_harness:
+            total_steps += 1
+        total_steps = max(total_steps, 1)
+        step = 0
+
+        def _step(label: str):
+            nonlocal step
+            step += 1
+            self._wizard_set_progress(step, total_steps, label)
+
+        def _cancelled() -> bool:
+            return self.task_cancel_event.is_set()
+
+        try:
+            if selected.get("graph"):
+                out = os.path.join(root, "graphs")
+                os.makedirs(out, exist_ok=True)
+                for tag, kind, angles, values in patterns:
+                    if _cancelled():
+                        cancelled = True
+                        break
+                    try:
+                        fig, _ = build_diagram_export_figure(
+                            kind=kind,
+                            angles=angles,
+                            values=values,
+                            title=f"Diagrama {tag.upper()}",
+                            prefer_polar=(kind == "H"),
+                        )
+                        path = os.path.join(out, f"{prefix}_{tag}_plot.png")
+                        fig.savefig(path, dpi=300)
+                        exported.append({"kind": f"WIZARD_{tag.upper()}_PLOT", "path": path})
+                    except Exception as e:
+                        warnings.append(f"Grafico {tag}: {e}")
+                    _step(f"Graficos: {tag}")
+
+            if not cancelled and selected.get("table"):
+                out = os.path.join(root, "tables")
+                os.makedirs(out, exist_ok=True)
+                for tag, kind, angles, values in patterns:
+                    if _cancelled():
+                        cancelled = True
+                        break
+                    try:
+                        if kind == "V":
+                            t_ang, t_val = self._table_points_vertical(angles, values)
+                            color = "#4e79a7"
+                            title = f"Tabela {tag.upper()} - Vertical"
+                        else:
+                            t_ang, t_val = self._table_points_horizontal(angles, values)
+                            color = "#f28e2b"
+                            title = f"Tabela {tag.upper()} - Horizontal"
+                        img = render_table_image(t_ang, linear_to_db(t_val), "dB", color, title)
+                        path = os.path.join(out, f"{prefix}_{tag}_table.png")
+                        img.save(path)
+                        exported.append({"kind": f"WIZARD_{tag.upper()}_TABLE", "path": path})
+                    except Exception as e:
+                        warnings.append(f"Tabela {tag}: {e}")
+                    _step(f"Tabelas: {tag}")
+
+            if not cancelled and selected.get("pat"):
+                out = os.path.join(root, "pat")
+                os.makedirs(out, exist_ok=True)
+                for tag, kind, angles, values in patterns:
+                    if _cancelled():
+                        cancelled = True
+                        break
+                    try:
+                        path = os.path.join(out, f"{prefix}_{tag}.pat")
+                        if kind == "V":
+                            try:
+                                a_out, v_out = resample_vertical(angles, values, norm="none")
+                            except Exception:
+                                a_out, v_out = _resample_vertical_adt(angles, values)
+                            write_pat_vertical_new_format(path, f"{prefix} {tag}", 0.0, 1, a_out, v_out, step=1)
+                        else:
+                            a_out, v_out = resample_horizontal(angles, values, norm="none")
+                            write_pat_horizontal_new_format(path, f"{prefix} {tag}", 0.0, 1, a_out, v_out, step=1)
+                        exported.append({"kind": f"WIZARD_{tag.upper()}_PAT", "path": path})
+                    except Exception as e:
+                        warnings.append(f"PAT {tag}: {e}")
+                    _step(f"PAT: {tag}")
+
+            if not cancelled and selected.get("adt"):
+                out = os.path.join(root, "pat_adt")
+                os.makedirs(out, exist_ok=True)
+                for tag, kind, angles, values in patterns:
+                    if _cancelled():
+                        cancelled = True
+                        break
+                    try:
+                        path = os.path.join(out, f"{prefix}_{tag}_ADT.pat")
+                        write_pat_adt_format(path, f"{prefix} {tag}", angles, values, pattern_type=kind)
+                        exported.append({"kind": f"WIZARD_{tag.upper()}_ADT", "path": path})
+                    except Exception as e:
+                        warnings.append(f"ADT {tag}: {e}")
+                    _step(f"ADT: {tag}")
+
+            if not cancelled and selected.get("prn"):
+                out = os.path.join(root, "prn")
+                os.makedirs(out, exist_ok=True)
+                name_base = self.prn_name.get().strip() or "ANTENA_FM"
+                make = self.prn_make.get().strip() or "RFS"
+                freq = self._safe_meta_float(self.prn_freq.get(), 99.50)
+                freq_unit = self.prn_freq_unit.get()
+                gain = self._safe_meta_float(self.prn_gain.get(), 2.77)
+                h_width = self._safe_meta_float(self.prn_h_width.get(), 65.0)
+                v_width = self._safe_meta_float(self.prn_v_width.get(), 45.0)
+                fb_ratio = self._safe_meta_float(self.prn_fb_ratio.get(), 25.0)
+                for tag, h_ang, h_val, v_ang, v_val in pairs:
+                    if _cancelled():
+                        cancelled = True
+                        break
+                    try:
+                        h_out, hv = resample_horizontal(h_ang, h_val, norm="none")
+                        try:
+                            v_out, vv = resample_vertical(v_ang, v_val, norm="none")
+                        except Exception:
+                            v_out, vv = _resample_vertical_adt(v_ang, v_val)
+                        prn_name = f"{name_base}_{tag.upper()}"
+                        path = os.path.join(out, f"{prefix}_{tag}.prn")
+                        write_prn_file(path, prn_name, make, freq, freq_unit, h_width, v_width, fb_ratio, gain, h_out, hv, v_out, vv)
+                        exported.append({"kind": f"WIZARD_{tag.upper()}_PRN", "path": path})
+                    except Exception as e:
+                        warnings.append(f"PRN {tag}: {e}")
+                    _step(f"PRN: {tag}")
+
+            if not cancelled and do_harness and has_harness:
+                out = os.path.join(root, "harness")
+                os.makedirs(out, exist_ok=True)
+                try:
+                    paths = self._export_vertical_harness_to_dir(out, prefix)
+                    for kind, p in paths:
+                        exported.append({"kind": f"WIZARD_{kind}", "path": p})
+                except Exception as e:
+                    warnings.append(f"Harness: {e}")
+                _step("Harness")
+
+            manifest_json = os.path.join(root, "wizard_manifest.json")
+            manifest_csv = os.path.join(root, "wizard_manifest.csv")
+            atomic_write_text(
+                manifest_json,
+                json.dumps(
+                    {
+                        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+                        "prefix": prefix,
+                        "cancelled": cancelled,
+                        "selected": selected,
+                        "warnings": warnings,
+                        "files": exported,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
+            csv_buf = StringIO()
+            writer = csv.writer(csv_buf, lineterminator="\n")
+            writer.writerow(["kind", "path"])
+            for item in exported:
+                writer.writerow([item.get("kind", ""), item.get("path", "")])
+            atomic_write_text(manifest_csv, csv_buf.getvalue())
+
+        except Exception as e:
+            warnings.append(f"Falha no worker de exportacao: {e}")
+            manifest_json = ""
+            manifest_csv = ""
+
+        self._wizard_set_progress(total_steps, total_steps, "Exportacao finalizada.")
+        return {
+            "root": root,
+            "exported": exported,
+            "warnings": warnings,
+            "cancelled": cancelled,
+            "manifest_json": manifest_json,
+            "manifest_csv": manifest_csv,
+        }
+
+    def open_preferences(self):
+        w = ctk.CTkToplevel(self)
+        w.title("Preferences")
+        w.geometry("420x230")
+        ctk.CTkLabel(w, text="Default Norm Mode").pack(anchor="w", padx=10, pady=(12, 4))
+        ctk.CTkOptionMenu(w, variable=self.norm_mode_var, values=["none", "max", "rms"]).pack(anchor="w", padx=10)
+        ctk.CTkLabel(w, text="Observacao: preferencias sao salvas no projeto/autosave.").pack(anchor="w", padx=10, pady=10)
+        ctk.CTkButton(w, text="Close", command=w.destroy).pack(anchor="e", padx=10, pady=10)
+
+    def show_about(self):
+        messagebox.showinfo(
+            "About",
+            "EFTX Converter\\nSuite profissional de diagramas\\nPAT/ADT/PRN + composicoes + estudo completo.",
+        )
+
+    def open_log_window(self):
+        w = ctk.CTkToplevel(self)
+        w.title("Application Log")
+        w.geometry("1000x520")
+        box = ctk.CTkTextbox(w, wrap="none")
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+        try:
+            if os.path.exists(LOG_FILE):
+                with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+                    txt = f.read()
+            else:
+                txt = "Log file not found."
+            box.insert("0.0", txt[-200_000:])
+            box.see("end")
+        except Exception:
+            box.insert("0.0", "Falha ao abrir log.")
+        box.configure(state="disabled")
+
+    def _try_recover_autosave(self):
+        try:
+            if not os.path.exists(self.autosave_path):
+                return
+            if not messagebox.askyesno("Recover autosave", "Foi encontrado autosave. Deseja recuperar?"):
+                return
+            with open(self.autosave_path, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self._apply_project_state(data)
+                self._set_status("Autosave recuperado.")
+        except Exception:
+            LOGGER.exception("Falha ao recuperar autosave.")
+
+    def _autosave_tick(self):
+        try:
+            data = self._collect_project_state()
+            atomic_write_text(self.autosave_path, json.dumps(data, ensure_ascii=False, indent=2))
+        except Exception:
+            LOGGER.exception("Falha no autosave.")
+        finally:
+            self.after(30_000, self._autosave_tick)
 
     def show_help(self):
         w = ctk.CTkToplevel(self)
@@ -1750,30 +3043,63 @@ class PATConverterApp(ctk.CTk):
         txt.insert("0.0", info)
         txt.configure(state="disabled")
 
+    def _confirm_loaded_pattern_type(self, pattern: dict) -> Optional[str]:
+        reasons = pattern.get("classification_reasons", [])
+        if not isinstance(reasons, list):
+            reasons = []
+        reasons_txt = ""
+        if reasons:
+            reasons_txt = "\n\nEvidencias:\n- " + "\n- ".join(str(x) for x in reasons[:5])
+
+        msg = (
+            f"Diagrama: {pattern.get('name', 'sem_nome')}\n"
+            "Tipo armazenado: indefinido/ambiguo.\n\n"
+            "Selecione como carregar:\n"
+            "SIM = Azimute (H, polar)\n"
+            "NAO = Elevacao (V, planar)\n"
+            "Cancelar = nao carregar."
+            f"{reasons_txt}"
+        )
+        ans = messagebox.askyesnocancel("Confirmar tipo do diagrama", msg)
+        if ans is None:
+            return None
+        return "H" if ans else "V"
+
     def load_from_library(self, pattern: dict):
         """Callback when a thumbnail is clicked"""
         try:
-            ptype = pattern['type']
+            ptype = str(pattern.get("type", "")).upper()
             ang = pattern['angles']
             val = pattern['values']
             name = pattern['name']
             
             if ptype == 'V':
+                self.v_plot_mode.set("Planar")
                 self.v_angles, self.v_vals = ang, val
                 self._plot_vertical_file(ang, val)
                 self._set_status(f"Carregado da Biblioteca: {name} (Vertical)")
                 # Switch tab
                 self.tabs.set("Arquivo")
             elif ptype == 'H':
+                self.h_plot_mode.set("Polar")
                 self.h_angles, self.h_vals = ang, val
                 self._plot_horizontal_file(ang, val)
                 self._set_status(f"Carregado da Biblioteca: {name} (Horizontal)")
                 self.tabs.set("Arquivo")
             else:
-                # Ask user? Assume H?
-                self.h_angles, self.h_vals = ang, val
-                self._plot_horizontal_file(ang, val)
-                self._set_status(f"Carregado da Biblioteca: {name} (Assumido Horizontal)")
+                confirmed = self._confirm_loaded_pattern_type(pattern)
+                if confirmed is None:
+                    return
+                if confirmed == "V":
+                    self.v_plot_mode.set("Planar")
+                    self.v_angles, self.v_vals = ang, val
+                    self._plot_vertical_file(ang, val)
+                    self._set_status(f"Carregado da Biblioteca: {name} (Vertical confirmado)")
+                else:
+                    self.h_plot_mode.set("Polar")
+                    self.h_angles, self.h_vals = ang, val
+                    self._plot_horizontal_file(ang, val)
+                    self._set_status(f"Carregado da Biblioteca: {name} (Horizontal confirmado)")
                 self.tabs.set("Arquivo")
                 
         except Exception as e:
@@ -2337,6 +3663,13 @@ class PATConverterApp(ctk.CTk):
             if isinstance(ref, tk.StringVar):
                 ref.set(str(val))
 
+        # Convencao fixa de visualizacao:
+        # elevacao -> planar, azimute -> polar.
+        if isinstance(getattr(self, "v_plot_mode", None), tk.StringVar):
+            self.v_plot_mode.set("Planar")
+        if isinstance(getattr(self, "h_plot_mode", None), tk.StringVar):
+            self.h_plot_mode.set("Polar")
+
         # Compatibilidade com versoes antigas que salvavam null fill em dB.
         if (
             isinstance(string_vars_state, dict)
@@ -2403,10 +3736,11 @@ class PATConverterApp(ctk.CTk):
             return
         try:
             data = self._collect_project_state()
-            with open(path, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+            self.project_file_path = path
             self._set_status(f"Progresso salvo: {path}")
         except Exception as e:
+            LOGGER.exception("Erro ao salvar progresso.")
             messagebox.showerror("Erro ao salvar progresso", str(e))
 
     def load_work_in_progress(self):
@@ -2422,8 +3756,10 @@ class PATConverterApp(ctk.CTk):
             if not isinstance(data, dict):
                 raise ValueError("Formato invalido de arquivo de projeto.")
             self._apply_project_state(data)
+            self.project_file_path = path
             self._set_status(f"Progresso carregado: {path}")
         except Exception as e:
+            LOGGER.exception("Erro ao carregar progresso.")
             messagebox.showerror("Erro ao carregar progresso", str(e))
 
     def export_recorded_files_bundle(self):
@@ -2468,21 +3804,21 @@ class PATConverterApp(ctk.CTk):
 
             manifest_json = os.path.join(bundle_dir, "manifesto_exportacoes.json")
             manifest_csv = os.path.join(bundle_dir, "manifesto_exportacoes.csv")
-            with open(manifest_json, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(manifest, f, ensure_ascii=False, indent=2)
+            atomic_write_text(manifest_json, json.dumps(manifest, ensure_ascii=False, indent=2))
 
-            with open(manifest_csv, "w", encoding="utf-8", newline="\n") as f:
-                writer = csv.writer(f)
-                writer.writerow(["index", "timestamp", "kind", "source_path", "status", "bundle_file"])
-                for row in manifest:
-                    writer.writerow([
-                        row["index"],
-                        row["timestamp"],
-                        row["kind"],
-                        row["source_path"],
-                        row["status"],
-                        row["bundle_file"],
-                    ])
+            csv_buf = StringIO()
+            writer = csv.writer(csv_buf, lineterminator="\n")
+            writer.writerow(["index", "timestamp", "kind", "source_path", "status", "bundle_file"])
+            for row in manifest:
+                writer.writerow([
+                    row["index"],
+                    row["timestamp"],
+                    row["kind"],
+                    row["source_path"],
+                    row["status"],
+                    row["bundle_file"],
+                ])
+            atomic_write_text(manifest_csv, csv_buf.getvalue())
 
             self._set_status(
                 f"Pacote exportado em {bundle_dir} (copiados: {copied}, ausentes: {missing})."
@@ -2747,13 +4083,13 @@ class PATConverterApp(ctk.CTk):
     # ... (rest of PATConverterApp)
 
 
-    # ==================== ABA 1 Ã¢â‚¬â€ ARQUIVO ==================== #
+    # ==================== ABA 1 — ARQUIVO ==================== #
     def _build_tab_file(self):
-        # Container principal com scroll para garantir visualizaÃƒÂ§ÃƒÂ£o em telas menores
-        # Usaremos CTkScrollableFrame para a aba inteira se necessÃƒÂ¡rio, 
-        # mas como temos plots grandes, melhor dividir em seÃƒÂ§ÃƒÂµes compactas.
+        # Container principal com scroll para garantir visualização em telas menores
+        # Usaremos CTkScrollableFrame para a aba inteira se necessário, 
+        # mas como temos plots grandes, melhor dividir em seções compactas.
         
-        # 1. Top Configuration Bar (ConfiguraÃƒÂ§ÃƒÂµes Globais)
+        # 1. Top Configuration Bar (Configurações Globais)
         top = ctk.CTkFrame(self.tab_file)
         top.pack(side=ctk.TOP, fill=ctk.X, padx=8, pady=5)
 
@@ -2768,7 +4104,7 @@ class PATConverterApp(ctk.CTk):
 
         ctk.CTkButton(top, text="Output dir...", command=self.choose_output_dir, width=90).pack(side=ctk.LEFT, padx=(15, 5))
         
-        # BotÃƒÂµes de ExportaÃƒÂ§ÃƒÂ£o Global no Topo (para fÃƒÂ¡cil acesso)
+        # Botões de Exportação Global no Topo (para fácil acesso)
         ctk.CTkButton(top, text="Export .PAT (All)", command=self.export_all_pat, fg_color="#22aa66", width=110).pack(side=ctk.RIGHT, padx=5)
         ctk.CTkButton(top, text="Export .PRN (All)", command=self.export_all_prn, fg_color="#aa6622", width=110).pack(side=ctk.RIGHT, padx=5)
 
@@ -2786,9 +4122,9 @@ class PATConverterApp(ctk.CTk):
         hv_header.pack(fill=ctk.X, pady=2, padx=5)
         ctk.CTkLabel(hv_header, text="Vertical (VRP)", font=ctk.CTkFont(size=14, weight="bold")).pack(side=ctk.LEFT)
         
-        # Plot Mode Toggles V
-        ctk.CTkRadioButton(hv_header, text="Planar", variable=self.v_plot_mode, value="Planar", command=self._refresh_v_plot, width=60).pack(side=ctk.RIGHT)
-        ctk.CTkRadioButton(hv_header, text="Polar", variable=self.v_plot_mode, value="Polar", command=self._refresh_v_plot, width=60).pack(side=ctk.RIGHT)
+        # Modo fixo: elevacao sempre planar
+        self.v_plot_mode.set("Planar")
+        ctk.CTkLabel(hv_header, text="Planar (fixo)", width=96, anchor="e").pack(side=ctk.RIGHT)
 
         # Plot
         self.fig_v1 = Figure(figsize=(4, 3), dpi=90)
@@ -2825,9 +4161,9 @@ class PATConverterApp(ctk.CTk):
         hh_header.pack(fill=ctk.X, pady=2, padx=5)
         ctk.CTkLabel(hh_header, text="Horizontal (HRP)", font=ctk.CTkFont(size=14, weight="bold")).pack(side=ctk.LEFT)
         
-        # Plot Mode Toggles H
-        ctk.CTkRadioButton(hh_header, text="Planar", variable=self.h_plot_mode, value="Planar", command=self._refresh_h_plot, width=60).pack(side=ctk.RIGHT)
-        ctk.CTkRadioButton(hh_header, text="Polar", variable=self.h_plot_mode, value="Polar", command=self._refresh_h_plot, width=60).pack(side=ctk.RIGHT)
+        # Modo fixo: azimute sempre polar
+        self.h_plot_mode.set("Polar")
+        ctk.CTkLabel(hh_header, text="Polar (fixo)", width=96, anchor="e").pack(side=ctk.RIGHT)
         
         # Plot
         self.fig_h1 = Figure(figsize=(4, 3), dpi=90)
@@ -2854,8 +4190,24 @@ class PATConverterApp(ctk.CTk):
         ctk.CTkButton(r2h, text="Img Grafico", command=lambda: self.export_plot_img("H"), fg_color="#4477aa", height=24, width=80).pack(side=ctk.LEFT, padx=2, expand=True, fill=ctk.X)
         ctk.CTkButton(r2h, text="Img Tabela", command=lambda: self.export_table_img("H"), fg_color="#aa4477", height=24, width=80).pack(side=ctk.LEFT, padx=2, expand=True, fill=ctk.X)
 
+        # 3. Measurement Panel (A/B/Delta)
+        measure = ctk.CTkFrame(self.tab_file)
+        measure.pack(side=ctk.TOP, fill=ctk.X, padx=8, pady=(0, 4))
+        self.measure_a_var = tk.StringVar(value="A: -")
+        self.measure_b_var = tk.StringVar(value="B: -")
+        self.measure_delta_var = tk.StringVar(value="Delta: -")
+        self.measure_src_var = tk.StringVar(value="Fonte: -")
 
-        # 3. Bottom: Metadata + PRN Utils (Compact)
+        ctk.CTkLabel(measure, text="Medicoes", font=ctk.CTkFont(size=12, weight="bold")).pack(side=ctk.LEFT, padx=(6, 10))
+        ctk.CTkLabel(measure, textvariable=self.measure_src_var).pack(side=ctk.LEFT, padx=4)
+        ctk.CTkLabel(measure, textvariable=self.measure_a_var).pack(side=ctk.LEFT, padx=8)
+        ctk.CTkLabel(measure, textvariable=self.measure_b_var).pack(side=ctk.LEFT, padx=8)
+        ctk.CTkLabel(measure, textvariable=self.measure_delta_var).pack(side=ctk.LEFT, padx=8)
+        ctk.CTkButton(measure, text="Copiar", width=80, command=self.copy_measurement).pack(side=ctk.RIGHT, padx=6)
+        ctk.CTkButton(measure, text="Limpar Marcadores", width=130, command=self._clear_file_markers).pack(side=ctk.RIGHT, padx=6)
+
+
+        # 4. Bottom: Metadata + PRN Utils (Compact)
         bottom = ctk.CTkFrame(self.tab_file)
         bottom.pack(side=ctk.BOTTOM, fill=ctk.X, padx=8, pady=5)
         
@@ -2898,6 +4250,124 @@ class PATConverterApp(ctk.CTk):
         self.prn_fb_ratio = ctk.CTkEntry(r2, width=60); self.prn_fb_ratio.pack(side=ctk.LEFT, padx=2); self.prn_fb_ratio.insert(0, "25.00")
 
         ctk.CTkButton(r2, text="Util: Clear", command=self.clear_all, height=24, fg_color="red", width=80).pack(side=ctk.RIGHT, padx=5)
+        self._attach_file_plot_interactors()
+
+    def _get_vertical_series(self):
+        return self.v_angles, self.v_vals
+
+    def _get_horizontal_series(self):
+        return self.h_angles, self.h_vals
+
+    def _clear_file_markers(self):
+        if self.v_file_interactor:
+            self.v_file_interactor.clear_markers()
+        if self.h_file_interactor:
+            self.h_file_interactor.clear_markers()
+        self.measure_a_var.set("A: -")
+        self.measure_b_var.set("B: -")
+        self.measure_delta_var.set("Delta: -")
+        self.measure_src_var.set("Fonte: -")
+        self._set_status("Marcadores limpos.")
+
+    def _measurement_snapshot_text(self) -> str:
+        return (
+            f"{self.measure_src_var.get()}\n"
+            f"{self.measure_a_var.get()}\n"
+            f"{self.measure_b_var.get()}\n"
+            f"{self.measure_delta_var.get()}"
+        )
+
+    def copy_measurement(self):
+        txt = self._measurement_snapshot_text()
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(txt)
+            self._set_status("Medicao copiada para area de transferencia.")
+        except Exception:
+            LOGGER.exception("Falha ao copiar medicao.")
+            messagebox.showwarning("Aviso", "Nao foi possivel copiar a medicao.")
+
+    def _on_plot_measure_update(self, marker_a, marker_b, kind: str):
+        src = "Fonte: HRP" if str(kind).upper() == "H" else "Fonte: VRP"
+        self.measure_src_var.set(src)
+
+        def _fmt_marker(mk, name):
+            if not mk:
+                return f"{name}: -"
+            theta = float(mk.get("theta_deg", 0.0))
+            v_lin = float(mk.get("v_lin", 0.0))
+            v_db = float(20.0 * math.log10(max(v_lin, 1e-12)))
+            return f"{name}: {theta:.2f} deg | {v_lin:.4f} lin | {v_db:.2f} dB"
+
+        self.measure_a_var.set(_fmt_marker(marker_a, "A"))
+        self.measure_b_var.set(_fmt_marker(marker_b, "B"))
+
+        if marker_a and marker_b:
+            t1 = float(marker_a.get("theta_deg", 0.0))
+            t2 = float(marker_b.get("theta_deg", 0.0))
+            v1 = float(marker_a.get("v_lin", 0.0))
+            v2 = float(marker_b.get("v_lin", 0.0))
+            if str(kind).upper() == "H":
+                dtheta = abs(((t2 - t1 + 180.0) % 360.0) - 180.0)
+            else:
+                dtheta = abs(t2 - t1)
+            ddb = 20.0 * math.log10(max(v2, 1e-12)) - 20.0 * math.log10(max(v1, 1e-12))
+            self.measure_delta_var.set(f"Delta: dTheta={dtheta:.2f} deg | dLevel={ddb:.2f} dB")
+            self._set_status(f"Medicao {kind}: dTheta={dtheta:.2f} deg | dLevel={ddb:.2f} dB")
+        else:
+            self.measure_delta_var.set("Delta: -")
+
+    def _show_plot_context_menu(self, event, interactor: PlotInteractor):
+        m = None
+        try:
+            m = tk.Menu(self, tearoff=0)
+            m.add_command(label="Copy Measurement", command=self.copy_measurement)
+            m.add_command(label="Clear Markers", command=interactor.clear_markers)
+            m.add_command(label="Reset View", command=interactor.reset_view)
+            if interactor.kind == "H":
+                m.add_command(label="Export Plot PNG (HRP)", command=lambda: self.export_plot_img("H"))
+            else:
+                m.add_command(label="Export Plot PNG (VRP)", command=lambda: self.export_plot_img("V"))
+            widget = interactor.canvas.get_tk_widget()
+            x = widget.winfo_pointerx()
+            y = widget.winfo_pointery()
+            m.tk_popup(x, y)
+        finally:
+            try:
+                if m is not None:
+                    m.grab_release()
+            except Exception:
+                pass
+
+    def _attach_file_plot_interactors(self):
+        try:
+            if self.h_file_interactor:
+                self.h_file_interactor.disconnect()
+            if self.v_file_interactor:
+                self.v_file_interactor.disconnect()
+        except Exception:
+            pass
+
+        self.v_file_interactor = PlotInteractor(
+            ax=self.ax_v1,
+            canvas=self.canvas_v1,
+            get_series_callable=self._get_vertical_series,
+            kind="V",
+            polar=False,
+            on_measure_update=self._on_plot_measure_update,
+            on_status=self._set_status,
+            on_context_menu=self._show_plot_context_menu,
+        )
+        self.h_file_interactor = PlotInteractor(
+            ax=self.ax_h1,
+            canvas=self.canvas_h1,
+            get_series_callable=self._get_horizontal_series,
+            kind="H",
+            polar=True,
+            on_measure_update=self._on_plot_measure_update,
+            on_status=self._set_status,
+            on_context_menu=self._show_plot_context_menu,
+        )
 
     def choose_output_dir(self):
         d = filedialog.askdirectory(title="Escolha a pasta de saida para .pat")
@@ -2977,7 +4447,7 @@ class PATConverterApp(ctk.CTk):
                     angles=self.v_angles,
                     values=self.v_vals,
                     title="Diagrama Vertical (Arquivo)",
-                    prefer_polar=(self.v_plot_mode.get() == "Polar"),
+                    prefer_polar=False,
                 )
             else:
                 if self.h_angles is None or self.h_vals is None:
@@ -2988,7 +4458,7 @@ class PATConverterApp(ctk.CTk):
                     angles=self.h_angles,
                     values=self.h_vals,
                     title="Diagrama Horizontal (Arquivo)",
-                    prefer_polar=(self.h_plot_mode.get() == "Polar"),
+                    prefer_polar=True,
                 )
             fig.savefig(fname, dpi=300)
             self._register_export(fname, f"{type_}_PLOT_IMG")
@@ -3041,26 +4511,19 @@ class PATConverterApp(ctk.CTk):
         if a.size == 0 or v.size == 0 or a.size != v.size:
             return
 
+        self.v_plot_mode.set("Planar")
         self.fig_v1.clf()
-        mode = self.v_plot_mode.get()
-        if mode == "Polar":
-            ax = self.fig_v1.add_subplot(111, projection="polar")
-            ax.set_title("Vertical (VRP) - polar")
-            ax.plot(np.deg2rad(a), v, color="tab:blue", linewidth=1.2)
-            ax.set_theta_zero_location("N")
-            ax.set_theta_direction(-1)
-            ax.grid(True, alpha=0.3)
-        else:
-            ax = self.fig_v1.add_subplot(111)
-            ax.set_title("Vertical (VRP) - planar")
-            ax.plot(a, v, color="tab:blue", linewidth=1.2)
-            ax.set_xlabel("Theta [deg]")
-            ax.set_ylabel("Amplitude")
-            ax.grid(True, alpha=0.3)
-            ax.set_xlim([float(np.min(a)), float(np.max(a))])
+        ax = self.fig_v1.add_subplot(111)
+        ax.set_title("Vertical (VRP) - planar")
+        ax.plot(a, v, color="tab:blue", linewidth=1.2)
+        ax.set_xlabel("Theta [deg]")
+        ax.set_ylabel("Amplitude")
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim([float(np.min(a)), float(np.max(a))])
 
         self.ax_v1 = ax
         self.canvas_v1.draw_idle()
+        self._attach_file_plot_interactors()
 
     def load_horizontal(self):
         path = filedialog.askopenfilename(title="Selecione HRP (CSV/TXT)",
@@ -3081,29 +4544,21 @@ class PATConverterApp(ctk.CTk):
         if a.size == 0 or v.size == 0 or a.size != v.size:
             return
 
+        self.h_plot_mode.set("Polar")
         self.fig_h1.clf()
-        mode = self.h_plot_mode.get()
-        if mode == "Planar":
-            ax = self.fig_h1.add_subplot(111)
-            ax.set_title("Horizontal (HRP) - planar")
-            ax.plot(a, v, color="tab:orange", linewidth=1.2)
-            ax.set_xlabel("Theta [deg]")
-            ax.set_ylabel("Amplitude")
-            ax.grid(True, alpha=0.3)
-            ax.set_xlim([float(np.min(a)), float(np.max(a))])
-        else:
-            ax = self.fig_h1.add_subplot(111, projection="polar")
-            ax.set_title("Horizontal (HRP) - polar")
-            a_wrap = np.mod(a, 360.0)
-            order = np.argsort(a_wrap)
-            theta = np.deg2rad(a_wrap[order])
-            ax.plot(theta, v[order], color="tab:orange", linewidth=1.2)
-            ax.set_theta_zero_location("N")
-            ax.set_theta_direction(-1)
-            ax.grid(True, alpha=0.3)
+        ax = self.fig_h1.add_subplot(111, projection="polar")
+        ax.set_title("Horizontal (HRP) - polar")
+        a_wrap = np.mod(a, 360.0)
+        order = np.argsort(a_wrap)
+        theta = np.deg2rad(a_wrap[order])
+        ax.plot(theta, v[order], color="tab:orange", linewidth=1.2)
+        ax.set_theta_zero_location("N")
+        ax.set_theta_direction(-1)
+        ax.grid(True, alpha=0.3)
 
         self.ax_h1 = ax
         self.canvas_h1.draw_idle()
+        self._attach_file_plot_interactors()
 
     def load_prn(self):
         path = filedialog.askopenfilename(title="Selecione arquivo PRN",
@@ -3121,36 +4576,28 @@ class PATConverterApp(ctk.CTk):
     def clear_all(self):
         self.v_angles = self.v_vals = None
         self.h_angles = self.h_vals = None
+        self.v_plot_mode.set("Planar")
+        self.h_plot_mode.set("Polar")
 
         self.fig_v1.clf()
-        if self.v_plot_mode.get() == "Polar":
-            self.ax_v1 = self.fig_v1.add_subplot(111, projection="polar")
-            self.ax_v1.set_title("Vertical (VRP) - polar")
-            self.ax_v1.set_theta_zero_location("N")
-            self.ax_v1.set_theta_direction(-1)
-        else:
-            self.ax_v1 = self.fig_v1.add_subplot(111)
-            self.ax_v1.set_title("Vertical (VRP) - planar")
-            self.ax_v1.set_xlabel("Theta [deg]")
-            self.ax_v1.set_ylabel("Amplitude")
+        self.ax_v1 = self.fig_v1.add_subplot(111)
+        self.ax_v1.set_title("Vertical (VRP) - planar")
+        self.ax_v1.set_xlabel("Theta [deg]")
+        self.ax_v1.set_ylabel("Amplitude")
         self.ax_v1.grid(True, alpha=0.3)
         self.ax_v1.text(0.5, 0.5, "Sem dados", ha="center", va="center", transform=self.ax_v1.transAxes)
         self.canvas_v1.draw_idle()
 
         self.fig_h1.clf()
-        if self.h_plot_mode.get() == "Planar":
-            self.ax_h1 = self.fig_h1.add_subplot(111)
-            self.ax_h1.set_title("Horizontal (HRP) - planar")
-            self.ax_h1.set_xlabel("Theta [deg]")
-            self.ax_h1.set_ylabel("Amplitude")
-        else:
-            self.ax_h1 = self.fig_h1.add_subplot(111, projection="polar")
-            self.ax_h1.set_title("Horizontal (HRP) - polar")
-            self.ax_h1.set_theta_zero_location("N")
-            self.ax_h1.set_theta_direction(-1)
+        self.ax_h1 = self.fig_h1.add_subplot(111, projection="polar")
+        self.ax_h1.set_title("Horizontal (HRP) - polar")
+        self.ax_h1.set_theta_zero_location("N")
+        self.ax_h1.set_theta_direction(-1)
         self.ax_h1.grid(True, alpha=0.3)
         self.ax_h1.text(0.5, 0.5, "Sem dados", ha="center", va="center", transform=self.ax_h1.transAxes)
         self.canvas_h1.draw_idle()
+        self._clear_file_markers()
+        self._attach_file_plot_interactors()
         self._set_status("Limpo.")
 
     def export_all_pat(self):
@@ -3221,7 +4668,7 @@ class PATConverterApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Erro ao exportar .PRN", str(e))
 
-    # ==================== ABA 2 Ã¢â‚¬â€ COMPOSIÃƒâ€¡ÃƒÆ’O VERTICAL ==================== #
+    # ==================== ABA 2 — COMPOSIÇÃO VERTICAL ==================== #
     def _build_tab_vertical(self):
         main_frame = ctk.CTkFrame(self.tab_vert)
         main_frame.pack(fill=ctk.BOTH, expand=True, padx=8, pady=8)
@@ -3412,14 +4859,14 @@ class PATConverterApp(ctk.CTk):
         return val
 
     def _get_float_value(self, var: tk.StringVar, default: float = 0.0) -> float:
-        """ObtÃƒÂ©m valor float de StringVar com tratamento de erro"""
+        """Obtém valor float de StringVar com tratamento de erro"""
         try:
             return float(var.get())
         except (ValueError, tk.TclError):
             return default
 
     def _get_int_value(self, var: tk.StringVar, default: int = 0) -> int:
-        """ObtÃƒÂ©m valor int de StringVar com tratamento de erro"""
+        """Obtém valor int de StringVar com tratamento de erro"""
         try:
             return int(var.get())
         except (ValueError, tk.TclError):
@@ -3616,7 +5063,7 @@ class PATConverterApp(ctk.CTk):
             self.vert_harness = harness
             self._update_vertical_weights_view(np.asarray(synth["w"], dtype=complex), harness, mode, synth)
 
-            # MÃƒÂ©tricas
+            # Métricas
             peak = float(np.max(E_comp))
             hpbw = hpbw_deg(base_angles, E_comp)
             d2d  = directivity_2d_cut(base_angles, E_comp, span_deg=180.0)
@@ -3669,6 +5116,114 @@ class PATConverterApp(ctk.CTk):
             self.ax_v2.legend(loc="upper right", fontsize=8)
         self.canvas_v2.draw()
 
+    def _export_vertical_harness_to_dir(self, out_dir: str, base: str) -> List[Tuple[str, str]]:
+        if self.vert_synth_result is None or self.vert_harness is None:
+            raise ValueError("Execute o calculo de null fill antes.")
+
+        csv_path = os.path.join(out_dir, f"{base}_nullfill_harness.csv")
+        json_path = os.path.join(out_dir, f"{base}_nullfill_harness.json")
+        plot_path = os.path.join(out_dir, f"{base}_nullfill_af.png")
+
+        w = np.asarray(self.vert_synth_result.get("w"), dtype=complex).reshape(-1)
+        eps = np.asarray(self.vert_synth_result.get("eps_deg"), dtype=float).reshape(-1)
+        e_ini = np.abs(np.asarray(self.vert_synth_result.get("E_initial"), dtype=complex))
+        e_fin = np.abs(np.asarray(self.vert_synth_result.get("E_final"), dtype=complex))
+        e_ini = e_ini / (np.max(e_ini) if np.max(e_ini) > 0 else 1.0)
+        e_fin = e_fin / (np.max(e_fin) if np.max(e_fin) > 0 else 1.0)
+        ini_db = 20.0 * np.log10(np.maximum(e_ini, 1e-12))
+        fin_db = 20.0 * np.log10(np.maximum(e_fin, 1e-12))
+
+        p_frac = np.asarray(self.vert_harness.get("p_frac"), dtype=float).reshape(-1)
+        phase_deg = np.asarray(self.vert_harness.get("phase_deg"), dtype=float).reshape(-1)
+        delta_len = np.asarray(self.vert_harness.get("delta_len_m"), dtype=float).reshape(-1)
+        att_db_ref = np.asarray(self.vert_harness.get("att_db_ref"), dtype=float).reshape(-1)
+
+        csv_buf = StringIO()
+        writer = csv.writer(csv_buf, lineterminator="\n")
+        writer.writerow(["baia", "w_real", "w_imag", "amp", "p_frac", "phase_deg", "att_db_ref", "delta_len_m"])
+        for i in range(len(w)):
+            writer.writerow([
+                i,
+                float(np.real(w[i])),
+                float(np.imag(w[i])),
+                float(np.abs(w[i])),
+                float(p_frac[i]) if i < p_frac.size else 0.0,
+                float(phase_deg[i]) if i < phase_deg.size else 0.0,
+                float(att_db_ref[i]) if i < att_db_ref.size else 0.0,
+                float(delta_len[i]) if i < delta_len.size else 0.0,
+            ])
+        atomic_write_text(csv_path, csv_buf.getvalue())
+
+        payload = {
+            "mode": self.vert_synth_result.get("mode", "both"),
+            "null_order": self.vert_synth_result.get("null_order", 1),
+            "target_percent": self.vert_synth_result.get("target_percent", 0.0),
+            "achieved_percent": self.vert_synth_result.get("achieved_percent", 0.0),
+            "phase_limit_deg": self.vert_synth_result.get("phase_limit_deg", None),
+            "null_regions": self.vert_synth_result.get("null_regions", []),
+            "null_levels": self.vert_synth_result.get("null_levels", []),
+            "condition_number": float(self.vert_synth_result.get("condition_number", float("nan"))),
+            "peak_eps_deg": float(self.vert_synth_result.get("peak_eps_deg", float("nan"))),
+            "weights": [{"real": float(np.real(x)), "imag": float(np.imag(x))} for x in w],
+            "harness": {
+                "amp": [float(x) for x in np.abs(w)],
+                "p_frac": [float(x) for x in p_frac],
+                "phase_deg": [float(x) for x in phase_deg],
+                "att_db_ref": [float(x) for x in att_db_ref],
+                "delta_len_m": [float(x) for x in delta_len],
+            },
+        }
+        atomic_write_text(json_path, json.dumps(payload, ensure_ascii=False, indent=2))
+
+        fig = Figure(figsize=(10.2, 4.6), dpi=120)
+        gs = fig.add_gridspec(1, 2, width_ratios=[4.7, 1.9], wspace=0.08)
+        ax = fig.add_subplot(gs[0, 0])
+        ax_info = fig.add_subplot(gs[0, 1])
+        ax_info.axis("off")
+        ax.set_title("AF Inicial vs Final (dB de campo)")
+        ax.set_xlabel("Elevacao [deg]")
+        ax.set_ylabel("Amplitude [dB]")
+        ax.grid(True, alpha=0.3)
+        ax.plot(eps, ini_db, "--", color="#888888", linewidth=1.1, label="Inicial")
+        ax.plot(eps, fin_db, "-", color="#1f77b4", linewidth=1.5, label="Final")
+        for r in (self.vert_synth_result.get("null_regions", []) or []):
+            c = float(r.get("eps_deg", 0.0))
+            hw = float(r.get("half_width_deg", 0.5))
+            ax.axvspan(c - hw, c + hw, color="#66cc99", alpha=0.15)
+            ax.axvline(c, color="#228b22", linestyle=":", linewidth=1.1)
+        try:
+            m = compute_diagram_metrics("V", eps, e_fin)
+            lines = format_diagram_metric_lines(m)
+            tp = self.vert_synth_result.get("target_percent", None)
+            ap = self.vert_synth_result.get("achieved_percent", None)
+            no = self.vert_synth_result.get("null_order", None)
+            if no is not None:
+                lines.insert(0, f"Nulo alvo: {int(no)}o")
+            if tp is not None and math.isfinite(float(tp)):
+                lines.insert(1, f"Null fill alvo: {float(tp):.2f}%")
+            if ap is not None and math.isfinite(float(ap)):
+                lines.insert(2, f"Null fill atingido: {float(ap):.2f}%")
+            txt = "Metricas\n" + "\n".join(lines)
+            ax_info.text(
+                0.03,
+                0.98,
+                txt,
+                ha="left",
+                va="top",
+                fontsize=8.7,
+                bbox=dict(boxstyle="round,pad=0.40", facecolor="#f9fbfd", edgecolor="#9aa7b3", alpha=0.98),
+            )
+        except Exception:
+            pass
+        ax.set_xlim([-90, 90])
+        ax.legend(loc="best", fontsize=8)
+        fig.savefig(plot_path, dpi=300)
+        return [
+            ("VERT_NULLFILL_HARNESS_CSV", csv_path),
+            ("VERT_NULLFILL_HARNESS_JSON", json_path),
+            ("VERT_NULLFILL_AF_IMG", plot_path),
+        ]
+
     def export_vertical_harness(self):
         if self.vert_synth_result is None or self.vert_harness is None:
             messagebox.showwarning("Nada para exportar", "Execute o calculo de null fill antes.")
@@ -3676,116 +5231,20 @@ class PATConverterApp(ctk.CTk):
 
         out_dir = self.output_dir or os.getcwd()
         base = self.base_name_var.get().strip() or "xxx"
-        csv_path = os.path.join(out_dir, f"{base}_nullfill_harness.csv")
-        json_path = os.path.join(out_dir, f"{base}_nullfill_harness.json")
-        plot_path = os.path.join(out_dir, f"{base}_nullfill_af.png")
 
         try:
-            w = np.asarray(self.vert_synth_result.get("w"), dtype=complex).reshape(-1)
-            eps = np.asarray(self.vert_synth_result.get("eps_deg"), dtype=float).reshape(-1)
-            e_ini = np.abs(np.asarray(self.vert_synth_result.get("E_initial"), dtype=complex))
-            e_fin = np.abs(np.asarray(self.vert_synth_result.get("E_final"), dtype=complex))
-            e_ini = e_ini / (np.max(e_ini) if np.max(e_ini) > 0 else 1.0)
-            e_fin = e_fin / (np.max(e_fin) if np.max(e_fin) > 0 else 1.0)
-            ini_db = 20.0 * np.log10(np.maximum(e_ini, 1e-12))
-            fin_db = 20.0 * np.log10(np.maximum(e_fin, 1e-12))
-
-            p_frac = np.asarray(self.vert_harness.get("p_frac"), dtype=float).reshape(-1)
-            phase_deg = np.asarray(self.vert_harness.get("phase_deg"), dtype=float).reshape(-1)
-            delta_len = np.asarray(self.vert_harness.get("delta_len_m"), dtype=float).reshape(-1)
-            att_db_ref = np.asarray(self.vert_harness.get("att_db_ref"), dtype=float).reshape(-1)
-
-            with open(csv_path, "w", encoding="utf-8", newline="\n") as f:
-                writer = csv.writer(f)
-                writer.writerow(["baia", "w_real", "w_imag", "amp", "p_frac", "phase_deg", "att_db_ref", "delta_len_m"])
-                for i in range(len(w)):
-                    writer.writerow([
-                        i,
-                        float(np.real(w[i])),
-                        float(np.imag(w[i])),
-                        float(np.abs(w[i])),
-                        float(p_frac[i]) if i < p_frac.size else 0.0,
-                        float(phase_deg[i]) if i < phase_deg.size else 0.0,
-                        float(att_db_ref[i]) if i < att_db_ref.size else 0.0,
-                        float(delta_len[i]) if i < delta_len.size else 0.0,
-                    ])
-
-            payload = {
-                "mode": self.vert_synth_result.get("mode", "both"),
-                "null_order": self.vert_synth_result.get("null_order", 1),
-                "target_percent": self.vert_synth_result.get("target_percent", 0.0),
-                "achieved_percent": self.vert_synth_result.get("achieved_percent", 0.0),
-                "phase_limit_deg": self.vert_synth_result.get("phase_limit_deg", None),
-                "null_regions": self.vert_synth_result.get("null_regions", []),
-                "null_levels": self.vert_synth_result.get("null_levels", []),
-                "condition_number": float(self.vert_synth_result.get("condition_number", float("nan"))),
-                "peak_eps_deg": float(self.vert_synth_result.get("peak_eps_deg", float("nan"))),
-                "weights": [{"real": float(np.real(x)), "imag": float(np.imag(x))} for x in w],
-                "harness": {
-                    "amp": [float(x) for x in np.abs(w)],
-                    "p_frac": [float(x) for x in p_frac],
-                    "phase_deg": [float(x) for x in phase_deg],
-                    "att_db_ref": [float(x) for x in att_db_ref],
-                    "delta_len_m": [float(x) for x in delta_len],
-                },
-            }
-            with open(json_path, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-
-            fig = Figure(figsize=(10.2, 4.6), dpi=120)
-            gs = fig.add_gridspec(1, 2, width_ratios=[4.7, 1.9], wspace=0.08)
-            ax = fig.add_subplot(gs[0, 0])
-            ax_info = fig.add_subplot(gs[0, 1])
-            ax_info.axis("off")
-            ax.set_title("AF Inicial vs Final (dB de campo)")
-            ax.set_xlabel("Elevacao [deg]")
-            ax.set_ylabel("Amplitude [dB]")
-            ax.grid(True, alpha=0.3)
-            ax.plot(eps, ini_db, "--", color="#888888", linewidth=1.1, label="Inicial")
-            ax.plot(eps, fin_db, "-", color="#1f77b4", linewidth=1.5, label="Final")
-            for r in (self.vert_synth_result.get("null_regions", []) or []):
-                c = float(r.get("eps_deg", 0.0))
-                hw = float(r.get("half_width_deg", 0.5))
-                ax.axvspan(c - hw, c + hw, color="#66cc99", alpha=0.15)
-                ax.axvline(c, color="#228b22", linestyle=":", linewidth=1.1)
-            try:
-                m = compute_diagram_metrics("V", eps, e_fin)
-                lines = format_diagram_metric_lines(m)
-                tp = self.vert_synth_result.get("target_percent", None)
-                ap = self.vert_synth_result.get("achieved_percent", None)
-                no = self.vert_synth_result.get("null_order", None)
-                if no is not None:
-                    lines.insert(0, f"Nulo alvo: {int(no)}o")
-                if tp is not None and math.isfinite(float(tp)):
-                    lines.insert(1, f"Null fill alvo: {float(tp):.2f}%")
-                if ap is not None and math.isfinite(float(ap)):
-                    lines.insert(2, f"Null fill atingido: {float(ap):.2f}%")
-                txt = "Metricas\n" + "\n".join(lines)
-                ax_info.text(
-                    0.03,
-                    0.98,
-                    txt,
-                    ha="left",
-                    va="top",
-                    fontsize=8.7,
-                    bbox=dict(boxstyle="round,pad=0.40", facecolor="#f9fbfd", edgecolor="#9aa7b3", alpha=0.98),
-                )
-            except Exception:
-                pass
-            ax.set_xlim([-90, 90])
-            ax.legend(loc="best", fontsize=8)
-            fig.savefig(plot_path, dpi=300)
-
-            self._register_export(csv_path, "VERT_NULLFILL_HARNESS_CSV")
-            self._register_export(json_path, "VERT_NULLFILL_HARNESS_JSON")
-            self._register_export(plot_path, "VERT_NULLFILL_AF_IMG")
-            self._set_status(f"Harness exportado: {csv_path}, {json_path}, {plot_path}")
+            items = self._export_vertical_harness_to_dir(out_dir, base)
+            for kind, p in items:
+                self._register_export(p, kind)
+            self._set_status(
+                "Harness exportado: " + ", ".join([p for _, p in items])
+            )
         except Exception as e:
             messagebox.showerror("Erro export harness", str(e))
 
     def export_vertical_array_pat(self):
         if self.vert_angles is None or self.vert_values is None:
-            messagebox.showwarning("Nada para exportar", "Execute o cÃƒÂ¡lculo da composiÃƒÂ§ÃƒÂ£o vertical primeiro.")
+            messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição vertical primeiro.")
             return
         base = self.base_name_var.get().strip() or "xxx"
         out_dir = self.output_dir or os.getcwd()
@@ -3803,11 +5262,11 @@ class PATConverterApp(ctk.CTk):
 
     def export_vertical_array_prn(self):
         if self.vert_angles is None or self.vert_values is None:
-            messagebox.showwarning("Nada para exportar", "Execute o cÃƒÂ¡lculo da composiÃƒÂ§ÃƒÂ£o vertical primeiro.")
+            messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição vertical primeiro.")
             return
             
         if self.h_angles is None or self.h_vals is None:
-            messagebox.showwarning("Dados incompletos", "Para exportar .PRN ÃƒÂ© necessÃƒÂ¡rio ter o HRP carregado na aba Arquivo.")
+            messagebox.showwarning("Dados incompletos", "Para exportar .PRN é necessário ter o HRP carregado na aba Arquivo.")
             return
             
         try:
@@ -3843,29 +5302,29 @@ class PATConverterApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Erro ao exportar .PRN", str(e))
 
-    # ==================== ABA 3 Ã¢â‚¬â€ COMPOSIÃƒâ€¡ÃƒÆ’O HORIZONTAL ==================== #
+    # ==================== ABA 3 — COMPOSIÇÃO HORIZONTAL ==================== #
     def _build_tab_horizontal(self):
-        # Frame principal dividido em entrada e grÃƒÂ¡fico
+        # Frame principal dividido em entrada e gráfico
         main_frame = ctk.CTkFrame(self.tab_horz)
         main_frame.pack(fill=ctk.BOTH, expand=True, padx=8, pady=8)
         
-        # Frame de entrada ÃƒÂ  esquerda
+        # Frame de entrada à esquerda
         input_frame = ctk.CTkFrame(main_frame)
         input_frame.pack(side=ctk.LEFT, fill=ctk.Y, padx=(0, 8), pady=8)
         
-        # Frame do grÃƒÂ¡fico ÃƒÂ  direita
+        # Frame do gráfico à direita
         plot_frame = ctk.CTkFrame(main_frame)
         plot_frame.pack(side=ctk.RIGHT, fill=ctk.BOTH, expand=True, padx=8, pady=8)
 
-        # TÃƒÂ­tulo
-        ctk.CTkLabel(input_frame, text="ParÃƒÂ¢metros do Array Horizontal", 
+        # Título
+        ctk.CTkLabel(input_frame, text="Parâmetros do Array Horizontal", 
                     font=ctk.CTkFont(weight="bold")).pack(pady=(8, 12))
 
-        # ValidaÃƒÂ§ÃƒÂ£o para campos numÃƒÂ©ricos
+        # Validação para campos numéricos
         vcmd_float = (self.register(validate_float), '%P')
         vcmd_int = (self.register(validate_int), '%P')
 
-        # ParÃƒÂ¢metros organizados verticalmente
+        # Parâmetros organizados verticalmente
         self.horz_N       = tk.StringVar(value="4")
         self.horz_beta    = tk.StringVar(value="0.0")
         self.horz_level   = tk.StringVar(value="1.0")
@@ -3875,7 +5334,7 @@ class PATConverterApp(ctk.CTk):
         self.horz_funit   = tk.StringVar(value="GHz")
         self.horz_norm    = tk.StringVar(value="max")
 
-        # ParÃƒÂ¢metros de exportaÃƒÂ§ÃƒÂ£o
+        # Parâmetros de exportação
         self.horz_desc   = tk.StringVar(value="Array Horizontal")
         self.horz_gain   = tk.StringVar(value="0.0")
         self.horz_step   = tk.StringVar(value="1")
@@ -3912,7 +5371,7 @@ class PATConverterApp(ctk.CTk):
         create_param_row(input_frame, "DeltaPhi [deg]:", self.horz_stepdeg, validate="float")
         create_param_row(input_frame, "Normalizar:", self.horz_norm, ["none","max","rms"])
 
-        # SeÃƒÂ§ÃƒÂ£o de exportaÃƒÂ§ÃƒÂ£o
+        # Seção de exportação
         export_frame = ctk.CTkFrame(input_frame)
         export_frame.pack(fill=ctk.X, padx=8, pady=12)
         ctk.CTkLabel(export_frame, text="Exportacao", font=ctk.CTkFont(weight="bold")).pack(pady=(4, 8))
@@ -3922,7 +5381,7 @@ class PATConverterApp(ctk.CTk):
         create_param_row(export_frame, "N Antenas:", self.horz_num_antennas, validate="int")
         create_param_row(export_frame, "Passo [deg]:", self.horz_step, ["1","2","3","4","5"])
 
-        # BotÃƒÂµes de exportaÃƒÂ§ÃƒÂ£o
+        # Botões de exportação
         btn_frame = ctk.CTkFrame(input_frame)
         btn_frame.pack(fill=ctk.X, padx=8, pady=12)
         ctk.CTkButton(btn_frame, text="Calcular HRP", command=self.compute_horizontal_panels, 
@@ -3971,7 +5430,7 @@ class PATConverterApp(ctk.CTk):
             # Reamostra o elemento (HRP) na grade alvo
             base_angles, base_vals = resample_horizontal(self.h_angles, self.h_vals, norm=self.horz_norm.get())
 
-            # ParÃƒÂ¢metros com tratamento de erro
+            # Parâmetros com tratamento de erro
             N   = self._get_int_value(self.horz_N, 4)
             beta_deg = self._get_float_value(self.horz_beta, 0.0)
             w    = self._get_float_value(self.horz_level, 1.0)
@@ -3982,11 +5441,11 @@ class PATConverterApp(ctk.CTk):
             lam = C0 / max(f_hz, 1.0)
             k   = 2.0 * math.pi / lam
 
-            # CÃƒÂLCULO CORRETO: PosiÃƒÂ§ÃƒÂµes dos painÃƒÂ©is em um polÃƒÂ­gono regular no plano horizontal
+            # CÁLCULO CORRETO: Posições dos painéis em um polígono regular no plano horizontal
             alpha_m_deg = np.arange(N) * dphi_deg
             alpha_m_rad = np.deg2rad(alpha_m_deg)
             
-            # Raio do polÃƒÂ­gono para que a distÃƒÂ¢ncia entre painÃƒÂ©is adjacentes seja s
+            # Raio do polígono para que a distância entre painéis adjacentes seja s
             if N > 1:
                 R = s / (2 * np.sin(np.pi / N))
             else:
@@ -3995,7 +5454,7 @@ class PATConverterApp(ctk.CTk):
             # Inicializar o campo composto
             E_comp = np.zeros(len(base_angles), dtype=complex)
 
-            # Para cada ÃƒÂ¢ngulo de observaÃƒÂ§ÃƒÂ£o phi (azimute)
+            # Para cada ângulo de observação phi (azimute)
             phi_rad = np.deg2rad(base_angles)
             
             for i in range(len(base_angles)):
@@ -4004,32 +5463,32 @@ class PATConverterApp(ctk.CTk):
                 
                 # Para cada painel no array
                 for m in range(N):
-                    # PosiÃƒÂ§ÃƒÂ£o do painel m
+                    # Posição do painel m
                     x_m = R * np.cos(alpha_m_rad[m])
                     y_m = R * np.sin(alpha_m_rad[m])
                     
-                    # Vetor de direÃƒÂ§ÃƒÂ£o de observaÃƒÂ§ÃƒÂ£o
+                    # Vetor de direção de observação
                     u_x = np.cos(phi)
                     u_y = np.sin(phi)
                     
-                    # DiferenÃƒÂ§a de caminho para o painel m
+                    # Diferença de caminho para o painel m
                     delta_r = x_m * u_x + y_m * u_y
                     
-                    # Fase devido ÃƒÂ  diferenÃƒÂ§a de caminho
+                    # Fase devido à diferença de caminho
                     phase_geom = k * delta_r
                     
-                    # Fase progressiva (excitaÃƒÂ§ÃƒÂ£o)
+                    # Fase progressiva (excitação)
                     phase_excit = np.deg2rad(m * beta_deg)
                     
-                    # Ãƒâ€šngulo relativo entre a direÃƒÂ§ÃƒÂ£o de observaÃƒÂ§ÃƒÂ£o e a orientaÃƒÂ§ÃƒÂ£o do painel
+                    # Ângulo relativo entre a direção de observação e a orientação do painel
                     rel_angle_deg = (base_angles[i] - alpha_m_deg[m]) % 360
                     if rel_angle_deg > 180:
                         rel_angle_deg -= 360
                     
-                    # Diagrama do elemento na direÃƒÂ§ÃƒÂ£o relativa
+                    # Diagrama do elemento na direção relativa
                     E_elem = np.interp(rel_angle_deg, base_angles, base_vals)
                     
-                    # ContribuiÃƒÂ§ÃƒÂ£o complexa do painel m
+                    # Contribuição complexa do painel m
                     E_total += w * E_elem * np.exp(1j * (phase_geom + phase_excit))
                 
                 E_comp[i] = E_total
@@ -4039,7 +5498,7 @@ class PATConverterApp(ctk.CTk):
             if np.max(E_comp_mag) > 0:
                 E_comp_mag = E_comp_mag / np.max(E_comp_mag)
 
-            # MÃƒÂ©tricas
+            # Métricas
             peak = float(np.max(E_comp_mag))
             hpbw = hpbw_deg(base_angles, E_comp_mag)
             d2d  = directivity_2d_cut(base_angles, E_comp_mag, span_deg=360.0)
@@ -4076,7 +5535,7 @@ class PATConverterApp(ctk.CTk):
 
     def export_horizontal_array_pat(self):
         if self.horz_angles is None or self.horz_values is None:
-            messagebox.showwarning("Nada para exportar", "Execute o cÃƒÂ¡lculo da composiÃƒÂ§ÃƒÂ£o horizontal primeiro.")
+            messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição horizontal primeiro.")
             return
         base = self.base_name_var.get().strip() or "xxx"
         out_dir = self.output_dir or os.getcwd()
@@ -4094,7 +5553,7 @@ class PATConverterApp(ctk.CTk):
 
     def export_horizontal_array_rfs(self):
         if self.horz_angles is None or self.horz_values is None:
-            messagebox.showwarning("Nada para exportar", "Execute o cÃƒÂ¡lculo da composiÃƒÂ§ÃƒÂ£o horizontal primeiro.")
+            messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição horizontal primeiro.")
             return
         
         base = self.base_name_var.get().strip() or "xxx"
@@ -4115,11 +5574,11 @@ class PATConverterApp(ctk.CTk):
 
     def export_horizontal_array_prn(self):
         if self.horz_angles is None or self.horz_values is None:
-            messagebox.showwarning("Nada para exportar", "Execute o cÃƒÂ¡lculo da composiÃƒÂ§ÃƒÂ£o horizontal primeiro.")
+            messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição horizontal primeiro.")
             return
             
         if self.v_angles is None or self.v_vals is None:
-            messagebox.showwarning("Dados incompletos", "Para exportar .PRN ÃƒÂ© necessÃƒÂ¡rio ter o VRP carregado na aba Arquivo.")
+            messagebox.showwarning("Dados incompletos", "Para exportar .PRN é necessário ter o VRP carregado na aba Arquivo.")
             return
             
         try:
@@ -4165,10 +5624,15 @@ class PATConverterApp(ctk.CTk):
     # ----------------------------- Misc ----------------------------- #
     def _set_status(self, text: str):
         self.status.configure(text=text)
+        try:
+            LOGGER.info(text)
+        except Exception:
+            pass
         if hasattr(self, "project_info_box"):
             self._refresh_project_overview()
 
 if __name__ == "__main__":
     app = PATConverterApp()
     app.mainloop()
+
 
