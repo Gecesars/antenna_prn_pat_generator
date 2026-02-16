@@ -3159,28 +3159,32 @@ class PATConverterApp(ctk.CTk):
             return "POL1"
         if "_h2" in t or "_v2" in t or "pol2" in t:
             return "POL2"
-        return "-"
+        return ""
 
     def _report_label_for_pattern(self, tag: str, kind: str) -> str:
         source = self._report_source_from_tag(tag)
         pol = self._report_pol_from_tag(tag)
         plane = self._report_page_plane(kind)
-        return f"{tag.upper()} [{source}] [{plane}] [{pol}]"
+        if pol:
+            return f"{tag.upper()} [{source}] [{plane}] [{pol}]"
+        return f"{tag.upper()} [{source}] [{plane}]"
 
     def _report_page_subtitle(self, tag: str, kind: str) -> str:
         project_name = (
             os.path.basename(self.project_file_path)
             if isinstance(self.project_file_path, str) and self.project_file_path.strip()
-            else "Sem arquivo"
+            else "(nao informado)"
         )
         base_name = self._project_base_name()
         pol = self._report_pol_from_tag(tag)
         freq = self._safe_meta_float(self.prn_freq.get(), 0.0)
         expr = "E/Emax linear"
-        return (
-            f"Projeto: {project_name} | Antena: {base_name} | "
-            f"Pol: {pol} | Freq: {freq:.3f} MHz | Expr: {expr}"
-        )
+        parts = [f"Projeto: {project_name}", f"Antena: {base_name}"]
+        if pol:
+            parts.append(f"Pol: {pol}")
+        parts.append(f"Freq: {freq:.3f} MHz")
+        parts.append(f"Expr: {expr}")
+        return " | ".join(parts)
 
     def _sort_report_patterns(
         self,
@@ -3436,13 +3440,16 @@ class PATConverterApp(ctk.CTk):
                     prefer_polar=(kind == "H"),
                 )
                 plot_path = os.path.join(tmp_plot_root, f"{idx:02d}_{tag}.png")
-                fig.savefig(plot_path, dpi=dpi)
+                fig.savefig(plot_path, dpi=dpi, bbox_inches="tight", pad_inches=0.08)
                 try:
                     fig.clf()
                 except Exception:
                     pass
 
-                tbl_ang, tbl_val = _prepare_pattern_for_export(kind, angles, values)
+                if kind == "H":
+                    tbl_ang, tbl_val = self._table_points_horizontal(angles, values)
+                else:
+                    tbl_ang, tbl_val = self._table_points_vertical(angles, values)
                 tbl_db = linear_to_db(np.asarray(tbl_val, dtype=float))
                 rows = [[float(a_i), float(v_i)] for a_i, v_i in zip(tbl_ang, tbl_db)]
 
@@ -3455,7 +3462,7 @@ class PATConverterApp(ctk.CTk):
                         "table": {
                             "columns": ["Ang [deg]", "Valor [dB]"],
                             "rows": rows,
-                            "note": "Tabela exibida compactada quando necessario.",
+                            "note": "",
                         },
                     }
                 )
@@ -5582,7 +5589,7 @@ class PATConverterApp(ctk.CTk):
                     prefer_polar=(kind == "H"),
                 )
                 p_plot = os.path.join(out_graph, f"{base}_{tag}_plot.png")
-                fig.savefig(p_plot, dpi=300)
+                fig.savefig(p_plot, dpi=300, bbox_inches="tight", pad_inches=0.08)
                 generated_plot_paths[tag] = p_plot
                 exported.append({"kind": f"ART_{tag.upper()}_PLOT", "path": p_plot})
             except Exception as e:
@@ -5736,8 +5743,11 @@ class PATConverterApp(ctk.CTk):
                             prefer_polar=(kind == "H"),
                         )
                         plot_path = os.path.join(out_graph, f"{base}_{tag}_plot.png")
-                        fig.savefig(plot_path, dpi=300)
-                    t_ang, t_val = _prepare_pattern_for_export(kind, angles, values)
+                        fig.savefig(plot_path, dpi=300, bbox_inches="tight", pad_inches=0.08)
+                    if kind == "H":
+                        t_ang, t_val = self._table_points_horizontal(angles, values)
+                    else:
+                        t_ang, t_val = self._table_points_vertical(angles, values)
                     m = compute_diagram_metrics(kind, t_ang, t_val)
                     rows = [[float(a_i), float(d_i)] for a_i, d_i in zip(t_ang, linear_to_db(t_val))]
                     pages.append(
@@ -5749,7 +5759,7 @@ class PATConverterApp(ctk.CTk):
                             "table": {
                                 "columns": ["Ang [deg]", "Valor [dB]"],
                                 "rows": rows,
-                                "note": "Tabela exibida compactada quando necessario; CSV completo salvo junto.",
+                                "note": "",
                             },
                         }
                     )

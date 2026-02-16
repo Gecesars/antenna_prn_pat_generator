@@ -19,7 +19,7 @@ SAFE_BOTTOM_MM = 30.0
 TITLE_FONT_SIZE = 15
 SUBTITLE_FONT_SIZE = 8.8
 BODY_FONT_SIZE = 7.6
-TABLE_FONT_SIZE = 7.2
+TABLE_FONT_SIZE = 6.8
 METRICS_FONT_SIZE = 8.0
 
 # Spacing (points).
@@ -40,7 +40,7 @@ SUPPORTED_DPI = (200, 300)
 
 # Diagram + metrics block.
 TOP_BLOCK_COL_RATIOS = (0.72, 0.28)
-TOP_BLOCK_MAX_HEIGHT_MM = 54.0
+TOP_BLOCK_MAX_HEIGHT_MM = 88.0
 
 
 def mm_to_pt(value_mm: float) -> float:

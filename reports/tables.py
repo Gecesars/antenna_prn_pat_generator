@@ -108,7 +108,7 @@ def build_table_for_pdf(
     rows: Sequence[Sequence[object]],
     *,
     available_width: float,
-    font_size: float = 7.2,
+    font_size: float = 6.8,
 ) -> Table:
     if not columns:
         columns = ["Column", "Value"]
@@ -125,10 +125,10 @@ def build_table_for_pdf(
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), float(font_size)),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#cfd6df")),
-        ("TOPPADDING", (0, 0), (-1, -1), 0.8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.8),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2.2),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2.2),
+        ("TOPPADDING", (0, 0), (-1, -1), 0.2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 1.5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 1.5),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]
 

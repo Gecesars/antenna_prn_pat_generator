@@ -51,6 +51,10 @@ def _page_payload(idx: int, plot_path: str, rows_count: int = 181):
     }
 
 
+def _pdf_text(path: str) -> str:
+    return "\n".join((p.extract_text() or "") for p in PdfReader(path).pages)
+
+
 def test_pdf_report_single_page(tmp_path):
     template = tmp_path / "template.pdf"
     plot = tmp_path / "plot.png"
@@ -121,3 +125,24 @@ def test_pdf_report_large_table_compaction_and_full_csv(tmp_path):
         lines = list(rd)
     assert len(lines) == rows_count + 1
 
+
+def test_pdf_report_no_compaction_note_for_small_table(tmp_path):
+    template = tmp_path / "template.pdf"
+    plot = tmp_path / "plot.png"
+    out_pdf = tmp_path / "relatorio_small.pdf"
+    _make_template_pdf(str(template))
+    _make_plot(str(plot))
+
+    payload = {"report_title": "Relatorio pequeno", "pages": [_page_payload(1, str(plot), rows_count=10)]}
+    res = export_report_pdf(
+        payload=payload,
+        output_pdf_path=str(out_pdf),
+        template_pdf_path=str(template),
+        save_full_csv=False,
+    )
+
+    assert out_pdf.exists()
+    assert res["page_results"][0]["compacted"] is False
+    txt = _pdf_text(str(out_pdf)).lower()
+    assert "compactada" not in txt
+    assert "compacted" not in txt
