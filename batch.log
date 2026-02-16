@@ -1,0 +1,175 @@
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 10:57:53 PM  Feb 14, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[info] GRPC server running on port: 62164.
+
+Stopping Batch Run: 10:58:40 PM  Feb 14, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 10:59:15 PM  Feb 14, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[info] GRPC server running on port: 62787.
+
+Stopping Batch Run: 10:59:46 PM  Feb 14, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 11:26:26 PM  Feb 14, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 52700. 
+-- Message Window --
+Stopping Batch Run: 11:27:31 PM  Feb 14, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 11:35:07 PM  Feb 14, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[info] GRPC server running on port: 52598.
+
+[error] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), Script macro error: No trace data for quantity: S(1,1) (12:12:13 PM  Feb 16, 2026)
+[info] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), Normal completion of simulation on server: Local Machine. (12:12:49 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:12:51 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:12:58 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:13:03 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:13:20 PM  Feb 16, 2026)
+e
+Non Graphical Mode: No Project??
+Starting Batch Run: 12:18:04 AM  Feb 15, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 59240. 
+-- Message Window --
+Stopping Batch Run: 12:21:46 AM  Feb 15, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 12:26:53 AM  Feb 15, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 60442. 
+-- Message Window --
+Stopping Batch Run: 12:33:29 AM  Feb 15, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 12:37:46 AM  Feb 15, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 63253. 
+-- Message Window --
+Stopping Batch Run: 8:58:40 AM  Feb 16, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 9:01:04 AM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 59122. 
+-- Message Window --
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 9:11:49 AM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 61259. 
+-- Message Window --
+Stopping Batch Run: 9:54:56 AM  Feb 16, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 10:02:48 AM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 54691. 
+-- Message Window --
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 10:15:48 AM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+[warning] 'D:/Simulations/Simulations/#IFTX/fm HP.aedt' was created with ACIS geometry kernel. It cannot be accessed by Electronics Desktop version 2025R1 and beyond.
+Please use 2024R2 version to translate into Parasolid.
+The project 'FM_ANEL_REFLETOR_TORRE' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+      *Global - Messages
+        [info] The project 'FM_ANEL_REFLETOR_TORRE' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+Stopping Batch Run: 11:30:55 AM  Feb 16, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 11:35:11 AM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 11:49:38 AM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+Stopping Batch Run: 12:01:36 PM  Feb 16, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 12:04:42 PM  Feb 16, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+Stopping Batch Run: 12:11:56 PM  Feb 16, 2026

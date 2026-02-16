@@ -1304,8 +1304,14 @@ def write_pat_vertical_new_format(path: str, description: str, gain: float, num_
 
     all_angles = np.concatenate([angles_0_180, angles_180_360[1:]])
     all_values = np.concatenate([values_0_180, values_180_360[1:]])
-    unique_angles, unique_indices = np.unique(all_angles, return_index=True)
-    unique_values = all_values[unique_indices]
+    ord_idx = np.argsort(all_angles)
+    aa = np.asarray(all_angles[ord_idx], dtype=float)
+    vv = np.asarray(all_values[ord_idx], dtype=float)
+    k = np.round(aa, 6)
+    unique_angles, inv = np.unique(k, return_inverse=True)
+    unique_values = np.full(unique_angles.shape, 0.0, dtype=float)
+    # Keep the highest linear sample when duplicate angles appear.
+    np.maximum.at(unique_values, inv, vv)
     final_values = np.interp(
         target_angles,
         unique_angles,

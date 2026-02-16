@@ -1,0 +1,5 @@
+connect OK dt=3364.19ms version=2025.2
+pull_hrp OK dt=3902.09ms points=361
+pull_vrp OK dt=1087.97ms points=181
+pull_3d OK dt=3446.03ms shape=181x2
+npz=D:\dev\Conversor_hfss_pat_RFS\out\FM_ANEL_REFLETOR_TORRE_smoke\ff_3d.npz

@@ -1,4 +1,4 @@
-'T_END_FEED_8_Hpol Vertical Pattern', 0.00, 1
+'painel Vertical Pattern', 0.00, 1
 0, 0.0199
 1, 0.0234
 2, 0.0278

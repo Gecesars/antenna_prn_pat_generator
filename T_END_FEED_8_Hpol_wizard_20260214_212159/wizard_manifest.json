@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-02-14T21:22:03",
+  "prefix": "T_END_FEED_8_Hpol",
+  "cancelled": false,
+  "selected": {
+    "graph": true,
+    "table": true,
+    "pat": true,
+    "adt": true,
+    "prn": true,
+    "harness": false
+  },
+  "warnings": [],
+  "files": [
+    {
+      "kind": "WIZARD_ARQUIVO_VRP_PLOT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\graphs\\T_END_FEED_8_Hpol_arquivo_vrp_plot.png"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_HRP_PLOT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\graphs\\T_END_FEED_8_Hpol_arquivo_hrp_plot.png"
+    },
+    {
+      "kind": "WIZARD_COMP_VRP_PLOT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\graphs\\T_END_FEED_8_Hpol_comp_vrp_plot.png"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_VRP_TABLE",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\tables\\T_END_FEED_8_Hpol_arquivo_vrp_table.png"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_HRP_TABLE",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\tables\\T_END_FEED_8_Hpol_arquivo_hrp_table.png"
+    },
+    {
+      "kind": "WIZARD_COMP_VRP_TABLE",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\tables\\T_END_FEED_8_Hpol_comp_vrp_table.png"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_VRP_PAT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\pat\\T_END_FEED_8_Hpol_arquivo_vrp.pat"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_HRP_PAT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\pat\\T_END_FEED_8_Hpol_arquivo_hrp.pat"
+    },
+    {
+      "kind": "WIZARD_COMP_VRP_PAT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\pat\\T_END_FEED_8_Hpol_comp_vrp.pat"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_VRP_ADT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\pat_adt\\T_END_FEED_8_Hpol_arquivo_vrp_ADT.pat"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_HRP_ADT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\pat_adt\\T_END_FEED_8_Hpol_arquivo_hrp_ADT.pat"
+    },
+    {
+      "kind": "WIZARD_COMP_VRP_ADT",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\pat_adt\\T_END_FEED_8_Hpol_comp_vrp_ADT.pat"
+    },
+    {
+      "kind": "WIZARD_ARQUIVO_PRN",
+      "path": "D:\\dev\\Conversor_hfss_pat_RFS\\T_END_FEED_8_Hpol_wizard_20260214_212159\\prn\\T_END_FEED_8_Hpol_arquivo.prn"
+    }
+  ]
+}

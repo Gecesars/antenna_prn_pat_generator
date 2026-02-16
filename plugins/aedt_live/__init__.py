@@ -1,0 +1,2 @@
+"""AEDT Live plugin package."""
+
