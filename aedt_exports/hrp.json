@@ -734,7 +734,7 @@
     "function": "dB",
     "lin_mode": "field",
     "view_mode": "Both",
-    "timestamp": "2026-02-16T12:13:03",
+    "timestamp": "2026-02-16T13:53:13",
     "setup_sweep": "Auto1 : LastAdaptive",
     "sphere_name": "3D_Sphere",
     "expression": "dB(GainTotal)",

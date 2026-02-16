@@ -49,34 +49,12 @@ Project directory: D:\Simulations\Simulations\#IFTX
 [warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:12:58 PM  Feb 16, 2026)
 [warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:13:03 PM  Feb 16, 2026)
 [warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (12:13:20 PM  Feb 16, 2026)
-e
-Non Graphical Mode: No Project??
-Starting Batch Run: 12:18:04 AM  Feb 15, 2026
-Running as user : RF01\geral
-Temp directory: C:\Users\geral\AppData\Local\Temp
-Project directory: D:\Simulations\Simulations\#IFTX
--- Message Window --
-      *Global - Messages
-        [info] GRPC server running on port: 59240. 
--- Message Window --
-Stopping Batch Run: 12:21:46 AM  Feb 15, 2026
- 
-Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
-Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
-Non Graphical Mode: No Project??
-Starting Batch Run: 12:26:53 AM  Feb 15, 2026
-Running as user : RF01\geral
-Temp directory: C:\Users\geral\AppData\Local\Temp
-Project directory: D:\Simulations\Simulations\#IFTX
--- Message Window --
-      *Global - Messages
-        [info] GRPC server running on port: 60442. 
--- Message Window --
-Stopping Batch Run: 12:33:29 AM  Feb 15, 2026
- 
-Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
-Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
-Non Graphical Mode: No Project??
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:52:58 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:04 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:04 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:04 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:13 PM  Feb 16, 2026)
+Mode: No Project??
 Starting Batch Run: 12:37:46 AM  Feb 15, 2026
 Running as user : RF01\geral
 Temp directory: C:\Users\geral\AppData\Local\Temp

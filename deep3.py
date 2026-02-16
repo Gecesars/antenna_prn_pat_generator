@@ -23,12 +23,12 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from io import StringIO
-from tkinter import filedialog, messagebox
-from typing import List, Tuple, Optional
+from tkinter import filedialog, messagebox, simpledialog
+from typing import List, Tuple, Optional, Dict
 from logging.handlers import RotatingFileHandler
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageTk
 import customtkinter as ctk
 import matplotlib
 matplotlib.use("Agg")
@@ -37,6 +37,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from null_fill_synthesis import synth_null_fill_by_order, weights_to_harness
 from ui.tabs.tab_advanced_viz import AdvancedVisualizationTab
 from core.perf import PerfTracer
+from reports.pdf_report import export_report_pdf, ReportCancelled, ReportExportError
 
 # Ensure root/plugins are importable for drop-in integrations.
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +61,7 @@ NUM_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 APP_USER_DIR = os.path.join(os.path.expanduser("~"), ".eftx_converter")
 LOG_DIR = os.path.join(APP_USER_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
+REPORT_TEMPLATE_DEFAULT = os.path.join(ROOT_DIR, "assets", "templates", "eftx_report_template.pdf")
 
 
 def ensure_app_dirs() -> None:
@@ -1709,6 +1711,14 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    @classmethod
+    def update_diagram_name(cls, id_: int, new_name: str):
+        conn = sqlite3.connect(cls.DB_NAME)
+        c = conn.cursor()
+        c.execute("UPDATE diagrams SET name=? WHERE id=?", (str(new_name), int(id_)))
+        conn.commit()
+        conn.close()
+
 
 # ----------------------------- Helpers: RFS PAT ----------------------------- #
 def write_pat_horizontal_rfs(path: str, name: str, gain: float, num: int, 
@@ -2106,11 +2116,22 @@ class RobustPatternParser:
 
 
 class DiagramThumbnail(ctk.CTkFrame):
-    def __init__(self, master, pattern_info: dict, on_click=None, width=300, height=350):
+    def __init__(
+        self,
+        master,
+        pattern_info: dict,
+        on_click=None,
+        on_rename=None,
+        on_delete=None,
+        width=300,
+        height=380,
+    ):
         super().__init__(master, width=width, height=height)
         self.pack_propagate(False)
         self.pattern = pattern_info
         self.on_click = on_click
+        self.on_rename = on_rename
+        self.on_delete = on_delete
         
         # Click handler
         self.bind("<Button-1>", self._on_frame_click)
@@ -2127,17 +2148,60 @@ class DiagramThumbnail(ctk.CTkFrame):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
         self.canvas.get_tk_widget().bind("<Button-1>", self._on_frame_click)
-        
+
         self.lbl_stats = ctk.CTkLabel(self, text="...", font=("Arial", 10), justify="left")
         self.lbl_stats.pack(pady=5, padx=5, fill="x")
         self.lbl_stats.bind("<Button-1>", self._on_frame_click)
-        
+
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(
+            actions,
+            text="Renomear",
+            width=90,
+            height=24,
+            fg_color="#4466aa",
+            command=self._request_rename,
+        ).pack(side="left", padx=(0, 4), expand=True, fill="x")
+        ctk.CTkButton(
+            actions,
+            text="Excluir",
+            width=80,
+            height=24,
+            fg_color="#aa4444",
+            command=self._request_delete,
+        ).pack(side="left", padx=(4, 0), expand=True, fill="x")
+
+        self._ctx_menu = tk.Menu(self, tearoff=0)
+        self._ctx_menu.add_command(label="Renomear", command=self._request_rename)
+        self._ctx_menu.add_command(label="Excluir", command=self._request_delete)
+
+        for target in (self, self.lbl_name, self.lbl_stats, self.canvas.get_tk_widget()):
+            target.bind("<Button-3>", self._show_context_menu, add="+")
+            target.bind("<Button-2>", self._show_context_menu, add="+")
+
         self._plot()
         self._calc_stats()
         
     def _on_frame_click(self, event):
         if self.on_click:
             self.on_click(self.pattern)
+
+    def _show_context_menu(self, event):
+        try:
+            self._ctx_menu.tk_popup(int(event.x_root), int(event.y_root))
+            self._ctx_menu.grab_release()
+        except Exception:
+            pass
+        return "break"
+
+    def _request_rename(self):
+        if callable(self.on_rename):
+            self.on_rename(self.pattern, self)
+
+    def _request_delete(self):
+        if callable(self.on_delete):
+            self.on_delete(self.pattern, self)
             
     def _plot(self):
         ang = self.pattern['angles']
@@ -2179,8 +2243,11 @@ class DiagramThumbnail(ctk.CTkFrame):
         self.fig.savefig(path, format='png', dpi=100)
     
     def delete_db_entry(self):
-        # Implementation to delete from DB if needed via ID
-        pass
+        self._request_delete()
+
+    def set_name(self, new_name: str):
+        self.pattern["name"] = str(new_name)
+        self.lbl_name.configure(text=str(new_name))
 
 
 class DiagramsTab(ctk.CTkFrame):
@@ -2492,8 +2559,63 @@ class DiagramsTab(ctk.CTkFrame):
             self.add_thumbnail(p)
         self._loaded_once = True
             
+    def _rename_thumbnail(self, pattern: dict, thumb=None):
+        if not isinstance(pattern, dict):
+            return
+        row_id = pattern.get("id")
+        if row_id is None:
+            messagebox.showwarning("Renomear", "Diagrama sem ID valido.")
+            return
+        current = str(pattern.get("name", "")).strip() or "diagrama"
+        new_name = simpledialog.askstring(
+            "Renomear diagrama",
+            "Novo nome:",
+            initialvalue=current,
+            parent=self,
+        )
+        if new_name is None:
+            return
+        new_name = str(new_name).strip()
+        if not new_name:
+            messagebox.showwarning("Renomear", "O nome nao pode ser vazio.")
+            return
+        try:
+            DatabaseManager.update_diagram_name(int(row_id), new_name)
+            pattern["name"] = new_name
+            if thumb is not None and hasattr(thumb, "set_name"):
+                thumb.set_name(new_name)
+        except Exception as e:
+            messagebox.showerror("Erro ao renomear", str(e))
+
+    def _delete_thumbnail(self, pattern: dict, thumb=None):
+        if not isinstance(pattern, dict):
+            return
+        row_id = pattern.get("id")
+        if row_id is None:
+            messagebox.showwarning("Excluir", "Diagrama sem ID valido.")
+            return
+        name = str(pattern.get("name", "diagrama")).strip() or "diagrama"
+        if not messagebox.askyesno("Excluir diagrama", f"Excluir '{name}' da biblioteca?"):
+            return
+        try:
+            DatabaseManager.delete_diagram(int(row_id))
+            if thumb is not None and thumb in self.thumbnails:
+                self.thumbnails.remove(thumb)
+                thumb.destroy()
+                self._regrid()
+            else:
+                self.load_library()
+        except Exception as e:
+            messagebox.showerror("Erro ao excluir", str(e))
+
     def add_thumbnail(self, pattern):
-        thumb = DiagramThumbnail(self.scroll, pattern, on_click=self.load_callback)
+        thumb = DiagramThumbnail(
+            self.scroll,
+            pattern,
+            on_click=self.load_callback,
+            on_rename=self._rename_thumbnail,
+            on_delete=self._delete_thumbnail,
+        )
         self.thumbnails.append(thumb)
         
         # Also bind scroll events to the thumbnail elements
@@ -2558,8 +2680,14 @@ class PATConverterApp(ctk.CTk):
         self.v_file_interactor = None
         self.export_executor = ThreadPoolExecutor(max_workers=1)
         self.export_future = None
+        self.report_future = None
+        self.artifacts_future = None
         self._wizard_lock = threading.Lock()
         self._wizard_progress = {"current": 0, "total": 1, "label": "Pronto"}
+        self._report_lock = threading.Lock()
+        self._report_progress = {"current": 0, "total": 1, "label": "Pronto"}
+        self._artifact_lock = threading.Lock()
+        self._artifact_progress = {"current": 0, "total": 1, "label": "Pronto"}
         self.perf_tracer = PERF
 
         # Tabview (abas principais)
@@ -2674,6 +2802,7 @@ class PATConverterApp(ctk.CTk):
         m_file.add_separator()
         m_file.add_command(label="Export PAT (All)", accelerator="Ctrl+E", command=self.export_all_pat)
         m_file.add_command(label="Export PRN (All)", accelerator="Ctrl+P", command=self.export_all_prn)
+        m_file.add_command(label="Export Report PDF...", accelerator="Ctrl+Shift+R", command=self.open_report_pdf_export)
         m_file.add_separator()
         m_file.add_command(label="Exit", accelerator="Alt+F4", command=self.quit)
         menubar.add_cascade(label="File", menu=m_file)
@@ -2726,6 +2855,7 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Control-i>", lambda e: self.batch_import())
         self.bind_all("<Control-e>", lambda e: self.export_all_pat())
         self.bind_all("<Control-Shift-E>", lambda e: self.open_export_wizard())
+        self.bind_all("<Control-Shift-R>", lambda e: self.open_report_pdf_export())
         self.bind_all("<Control-Shift-V>", lambda e: self.open_advanced_view())
         self.bind_all("<Control-p>", lambda e: self.export_all_prn())
         self.bind_all("<Control-l>", lambda e: self.open_log_window())
@@ -2749,6 +2879,13 @@ class PATConverterApp(ctk.CTk):
             self.tabs.set(name)
         except Exception:
             pass
+
+    def _any_export_task_running(self) -> bool:
+        futs = [self.export_future, self.report_future, self.artifacts_future]
+        for fut in futs:
+            if fut is not None and not fut.done():
+                return True
+        return False
 
     def _task_ui_start(self, label: str, total: int = 0):
         self.task_cancel_event.clear()
@@ -2914,7 +3051,7 @@ class PATConverterApp(ctk.CTk):
         )
 
     def open_export_wizard(self):
-        if self.export_future and not self.export_future.done():
+        if self._any_export_task_running():
             messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
             return
 
@@ -2979,6 +3116,415 @@ class PATConverterApp(ctk.CTk):
 
         ctk.CTkButton(run_row, text="Iniciar Exportacao", fg_color="#22aa66", command=_start).pack(side="right", padx=4)
         ctk.CTkButton(run_row, text="Cancelar", fg_color="#666666", command=w.destroy).pack(side="right", padx=4)
+
+    def _resolve_report_template_path(self) -> str:
+        candidates = [
+            REPORT_TEMPLATE_DEFAULT,
+            "/mnt/data/19cd48b4-6272-4aaa-8437-f87b5ffc2204.pdf",
+            os.path.join(ROOT_DIR, "modelo.pdf"),
+        ]
+        for c in candidates:
+            if c and os.path.isfile(c):
+                return c
+        return REPORT_TEMPLATE_DEFAULT
+
+    def _report_set_progress(self, current: int, total: int, label: str):
+        with self._report_lock:
+            self._report_progress = {
+                "current": max(0, int(current)),
+                "total": max(1, int(total)),
+                "label": str(label),
+            }
+
+    def _report_get_progress(self) -> dict:
+        with self._report_lock:
+            return dict(self._report_progress)
+
+    def _report_page_plane(self, kind: str) -> str:
+        return "Azimute" if str(kind).upper() == "H" else "Elevacao"
+
+    def _report_source_from_tag(self, tag: str) -> str:
+        t = str(tag).lower()
+        if t.startswith("arquivo_"):
+            return "Arquivo"
+        if t.startswith("comp_"):
+            return "Composicao"
+        if t.startswith("estudo_"):
+            return "Estudo"
+        return "Projeto"
+
+    def _report_pol_from_tag(self, tag: str) -> str:
+        t = str(tag).lower()
+        if "_h1" in t or "_v1" in t or "pol1" in t:
+            return "POL1"
+        if "_h2" in t or "_v2" in t or "pol2" in t:
+            return "POL2"
+        return "-"
+
+    def _report_label_for_pattern(self, tag: str, kind: str) -> str:
+        source = self._report_source_from_tag(tag)
+        pol = self._report_pol_from_tag(tag)
+        plane = self._report_page_plane(kind)
+        return f"{tag.upper()} [{source}] [{plane}] [{pol}]"
+
+    def _report_page_subtitle(self, tag: str, kind: str) -> str:
+        project_name = (
+            os.path.basename(self.project_file_path)
+            if isinstance(self.project_file_path, str) and self.project_file_path.strip()
+            else "Sem arquivo"
+        )
+        base_name = self._project_base_name()
+        pol = self._report_pol_from_tag(tag)
+        freq = self._safe_meta_float(self.prn_freq.get(), 0.0)
+        expr = "E/Emax linear"
+        return (
+            f"Projeto: {project_name} | Antena: {base_name} | "
+            f"Pol: {pol} | Freq: {freq:.3f} MHz | Expr: {expr}"
+        )
+
+    def _sort_report_patterns(
+        self,
+        patterns: List[Tuple[str, str, np.ndarray, np.ndarray]],
+        order_mode: str,
+    ) -> List[Tuple[str, str, np.ndarray, np.ndarray]]:
+        mode = str(order_mode or "").strip().lower()
+        if mode == "azimute primeiro":
+            return sorted(patterns, key=lambda it: (0 if it[1] == "H" else 1, it[0]))
+        if mode == "elevacao primeiro":
+            return sorted(patterns, key=lambda it: (0 if it[1] == "V" else 1, it[0]))
+        return list(patterns)
+
+    def open_report_pdf_export(self):
+        if self._any_export_task_running():
+            messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
+            return
+
+        patterns = []
+        seen = set()
+        for item in self._collect_project_patterns():
+            tag = str(item[0])
+            if tag in seen:
+                continue
+            seen.add(tag)
+            patterns.append(item)
+        if not patterns:
+            messagebox.showwarning("Sem dados", "Nao ha diagramas disponiveis para gerar relatorio PDF.")
+            return
+
+        w = ctk.CTkToplevel(self)
+        w.title("Exportar Relatorio PDF")
+        w.geometry("820x620")
+
+        cfg = ctk.CTkFrame(w)
+        cfg.pack(fill="x", padx=10, pady=(10, 6))
+
+        template_var = tk.StringVar(value=self._resolve_report_template_path())
+        order_var = tk.StringVar(value="Padrao")
+        dpi_var = tk.StringVar(value="300")
+        csv_var = tk.BooleanVar(value=True)
+
+        r1 = ctk.CTkFrame(cfg, fg_color="transparent")
+        r1.pack(fill="x", padx=4, pady=(2, 4))
+        ctk.CTkLabel(r1, text="Template PDF:", width=110, anchor="w").pack(side="left")
+        ctk.CTkEntry(r1, textvariable=template_var).pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkButton(
+            r1,
+            text="...",
+            width=40,
+            command=lambda: template_var.set(
+                filedialog.askopenfilename(
+                    title="Selecione o template PDF",
+                    filetypes=[("PDF", "*.pdf"), ("Todos", "*.*")],
+                )
+                or template_var.get()
+            ),
+        ).pack(side="left", padx=2)
+
+        r2 = ctk.CTkFrame(cfg, fg_color="transparent")
+        r2.pack(fill="x", padx=4, pady=(0, 2))
+        ctk.CTkLabel(r2, text="Ordem:", width=110, anchor="w").pack(side="left")
+        ctk.CTkOptionMenu(
+            r2,
+            variable=order_var,
+            values=["Padrao", "Azimute primeiro", "Elevacao primeiro"],
+            width=180,
+        ).pack(side="left", padx=4)
+        ctk.CTkLabel(r2, text="DPI:", width=50, anchor="w").pack(side="left", padx=(10, 2))
+        ctk.CTkOptionMenu(r2, variable=dpi_var, values=["200", "300"], width=90).pack(side="left")
+        ctk.CTkCheckBox(r2, text="Salvar tabelas completas (CSV)", variable=csv_var).pack(side="left", padx=12)
+
+        box = ctk.CTkFrame(w)
+        box.pack(fill="both", expand=True, padx=10, pady=8)
+        ctk.CTkLabel(box, text="Cortes para incluir", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(8, 4))
+
+        list_frame = ctk.CTkScrollableFrame(box)
+        list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        pattern_vars: Dict[str, tk.BooleanVar] = {}
+        for tag, kind, _, _ in patterns:
+            v = tk.BooleanVar(value=True)
+            pattern_vars[tag] = v
+            ctk.CTkCheckBox(list_frame, text=self._report_label_for_pattern(tag, kind), variable=v).pack(
+                anchor="w",
+                padx=4,
+                pady=3,
+            )
+
+        btns = ctk.CTkFrame(w, fg_color="transparent")
+        btns.pack(fill="x", padx=10, pady=(0, 10))
+
+        def _mark_all(value: bool):
+            for var in pattern_vars.values():
+                var.set(bool(value))
+
+        ctk.CTkButton(btns, text="Marcar todos", width=110, command=lambda: _mark_all(True)).pack(side="left", padx=3)
+        ctk.CTkButton(btns, text="Desmarcar", width=110, command=lambda: _mark_all(False)).pack(side="left", padx=3)
+
+        def _start():
+            selected_tags = [tag for tag, var in pattern_vars.items() if bool(var.get())]
+            if not selected_tags:
+                messagebox.showwarning("Sem cortes", "Selecione ao menos um corte.")
+                return
+            out_pdf = filedialog.asksaveasfilename(
+                title="Salvar relatorio PDF",
+                defaultextension=".pdf",
+                initialfile=f"{self._project_base_name()}_relatorio.pdf",
+                filetypes=[("PDF", "*.pdf")],
+            )
+            if not out_pdf:
+                return
+            cfg = {
+                "output_pdf": out_pdf,
+                "template_pdf": template_var.get().strip(),
+                "selected_tags": selected_tags,
+                "order_mode": order_var.get().strip(),
+                "dpi": int(dpi_var.get().strip() or "300"),
+                "save_csv": bool(csv_var.get()),
+            }
+            w.destroy()
+            self._run_report_export_async(cfg)
+
+        ctk.CTkButton(btns, text="Exportar Relatorio PDF", fg_color="#2277bb", command=_start).pack(side="right", padx=3)
+        ctk.CTkButton(btns, text="Fechar", fg_color="#666666", command=w.destroy).pack(side="right", padx=3)
+
+    def _run_report_export_async(self, cfg: dict):
+        if self._any_export_task_running():
+            messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
+            return
+
+        self.task_cancel_event.clear()
+        self._report_set_progress(0, 1, "Iniciando relatorio PDF...")
+        self._task_ui_start("Relatorio PDF: iniciando...", 1)
+        self.report_future = self.export_executor.submit(self._report_export_worker, dict(cfg))
+        self._poll_report_export()
+
+    def _poll_report_export(self):
+        if not self.report_future:
+            return
+        p = self._report_get_progress()
+        self._task_ui_progress(p.get("current", 0), p.get("total", 1), p.get("label", "Executando..."))
+        if self.report_future.done():
+            self._finalize_report_export()
+            return
+        self.after(140, self._poll_report_export)
+
+    def _finalize_report_export(self):
+        fut = self.report_future
+        self.report_future = None
+        if fut is None:
+            self._task_ui_finish("Relatorio PDF finalizado.")
+            return
+
+        try:
+            res = fut.result()
+        except Exception as e:
+            LOGGER.exception("Falha no export do relatorio PDF.")
+            self._task_ui_finish("Falha no relatorio PDF.")
+            messagebox.showerror("Erro", f"Falha na exportacao do relatorio PDF: {e}")
+            return
+
+        output_pdf = res.get("output_pdf", "")
+        warnings = list(res.get("warnings", []))
+        csv_files = list(res.get("csv_files", []))
+        cancelled = bool(res.get("cancelled", False))
+        pages = int(res.get("pages", 0))
+
+        if output_pdf:
+            self._register_export(output_pdf, "REPORT_PDF")
+        for p in csv_files:
+            self._register_export(p, "REPORT_TABLE_CSV")
+
+        if cancelled:
+            status = "Relatorio PDF cancelado."
+        else:
+            status = f"Relatorio PDF concluido: {pages} pagina(s)."
+        self._task_ui_finish(status)
+
+        lines = [status]
+        if output_pdf:
+            lines.append(f"PDF: {output_pdf}")
+        if csv_files:
+            lines.append(f"CSV completos: {len(csv_files)} arquivo(s)")
+        if warnings:
+            lines.append("")
+            lines.append(f"Avisos ({len(warnings)}):")
+            lines.extend([f"- {w}" for w in warnings[:12]])
+        if cancelled:
+            messagebox.showwarning("Relatorio PDF", "\n".join(lines))
+        else:
+            messagebox.showinfo("Relatorio PDF", "\n".join(lines))
+
+    def _report_export_worker(self, cfg: dict) -> dict:
+        warnings: List[str] = []
+        csv_files: List[str] = []
+        output_pdf = str(cfg.get("output_pdf", "") or "").strip()
+        template_pdf = str(cfg.get("template_pdf", "") or "").strip() or self._resolve_report_template_path()
+        selected_tags = [str(x) for x in cfg.get("selected_tags", [])]
+        order_mode = str(cfg.get("order_mode", "Padrao"))
+        dpi = int(cfg.get("dpi", 300))
+        save_csv = bool(cfg.get("save_csv", True))
+        cancelled = False
+
+        if not output_pdf:
+            raise ValueError("Caminho de saida do PDF nao informado.")
+        if not template_pdf or not os.path.isfile(template_pdf):
+            raise FileNotFoundError(f"Template PDF nao encontrado: {template_pdf}")
+
+        patterns_all = []
+        seen = set()
+        for item in self._collect_project_patterns():
+            tag = str(item[0])
+            if tag in seen:
+                continue
+            seen.add(tag)
+            patterns_all.append(item)
+        selected_set = set(selected_tags)
+        patterns = [p for p in patterns_all if p[0] in selected_set]
+        patterns = self._sort_report_patterns(patterns, order_mode)
+        if not patterns:
+            raise ValueError("Nenhum corte valido selecionado para o relatorio.")
+
+        total_pages = len(patterns)
+        total_steps = max(1, total_pages * 3 + 2)
+        step = 0
+
+        def _set(label: str):
+            self._report_set_progress(step, total_steps, label)
+
+        def _step(label: str):
+            nonlocal step
+            step += 1
+            _set(label)
+
+        self._report_set_progress(0, total_steps, "Preparando dados do relatorio...")
+
+        tmp_plot_root = tempfile.mkdtemp(prefix="eftx_report_plots_")
+        pages_payload = []
+        try:
+            for idx, (tag, kind, angles, values) in enumerate(patterns, start=1):
+                if self.task_cancel_event.is_set():
+                    cancelled = True
+                    break
+
+                title = f"Diagrama {tag.upper()} ({self._report_page_plane(kind)})"
+                subtitle = self._report_page_subtitle(tag, kind)
+                fig, metrics = build_diagram_export_figure(
+                    kind=kind,
+                    angles=angles,
+                    values=values,
+                    title=title,
+                    prefer_polar=(kind == "H"),
+                )
+                plot_path = os.path.join(tmp_plot_root, f"{idx:02d}_{tag}.png")
+                fig.savefig(plot_path, dpi=dpi)
+                try:
+                    fig.clf()
+                except Exception:
+                    pass
+
+                tbl_ang, tbl_val = _prepare_pattern_for_export(kind, angles, values)
+                tbl_db = linear_to_db(np.asarray(tbl_val, dtype=float))
+                rows = [[float(a_i), float(v_i)] for a_i, v_i in zip(tbl_ang, tbl_db)]
+
+                pages_payload.append(
+                    {
+                        "page_title": title,
+                        "page_subtitle": subtitle,
+                        "plot_image_path": plot_path,
+                        "metrics": metrics,
+                        "table": {
+                            "columns": ["Ang [deg]", "Valor [dB]"],
+                            "rows": rows,
+                            "note": "Tabela exibida compactada quando necessario.",
+                        },
+                    }
+                )
+                _step(f"Preparando pagina {idx}/{total_pages}: {tag}")
+
+            if cancelled:
+                self._report_set_progress(step, total_steps, "Exportacao cancelada.")
+                return {
+                    "cancelled": True,
+                    "warnings": warnings,
+                    "csv_files": [],
+                    "output_pdf": output_pdf,
+                    "pages": len(pages_payload),
+                }
+
+            payload = {
+                "report_title": f"Relatorio {self._project_base_name()}",
+                "author": self.author_var.get().strip() or "EFTX",
+                "pages": pages_payload,
+            }
+
+            def _pdf_progress(cur: int, total: int, label: str):
+                total = max(int(total), 1)
+                cur = max(0, min(int(cur), total))
+                if "Building report page" in str(label):
+                    pos = total_pages + cur
+                elif "Merging template page" in str(label):
+                    pos = total_pages * 2 + cur
+                else:
+                    pos = max(step, total_pages + 1)
+                self._report_set_progress(min(pos, total_steps), total_steps, str(label))
+
+            csv_dir = os.path.join(os.path.dirname(os.path.abspath(output_pdf)), "report_tables")
+            result = export_report_pdf(
+                payload=payload,
+                output_pdf_path=output_pdf,
+                template_pdf_path=template_pdf,
+                dpi=dpi,
+                save_full_csv=save_csv,
+                csv_output_dir=csv_dir if save_csv else None,
+                max_display_rows=80,
+                progress_cb=_pdf_progress,
+                cancel_check=lambda: self.task_cancel_event.is_set(),
+                logger=LOGGER,
+            )
+            warnings.extend(result.get("warnings", []))
+            csv_files.extend(result.get("csv_files", []))
+            step = total_steps
+            _set("Relatorio PDF finalizado.")
+
+            return {
+                "cancelled": False,
+                "warnings": warnings,
+                "csv_files": csv_files,
+                "output_pdf": output_pdf,
+                "pages": int(result.get("pages", total_pages)),
+            }
+        except ReportCancelled:
+            cancelled = True
+            self._report_set_progress(step, total_steps, "Exportacao cancelada.")
+            return {
+                "cancelled": True,
+                "warnings": warnings,
+                "csv_files": csv_files,
+                "output_pdf": output_pdf,
+                "pages": len(pages_payload),
+            }
+        except ReportExportError as e:
+            raise RuntimeError(str(e)) from e
 
     def _validate_cut(self, kind: str, angles: np.ndarray, values: np.ndarray) -> dict:
         k = str(kind).upper()
@@ -3146,7 +3692,7 @@ class PATConverterApp(ctk.CTk):
             return dict(self._wizard_progress)
 
     def _run_export_wizard_async(self, out_dir: str, prefix: str, selected: dict):
-        if self.export_future and not self.export_future.done():
+        if self._any_export_task_running():
             messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
             return
 
@@ -4074,6 +4620,13 @@ class PATConverterApp(ctk.CTk):
         ctk.CTkButton(top, text="Carregar Progresso", command=self.load_work_in_progress, fg_color="#4466aa", width=140).pack(side=ctk.LEFT, padx=4)
         ctk.CTkButton(
             top,
+            text="Gerar Artefatos",
+            command=self.generate_all_project_artifacts,
+            fg_color="#1f8b4c",
+            width=150,
+        ).pack(side=ctk.LEFT, padx=4)
+        ctk.CTkButton(
+            top,
             text="Exportar Ja Exportados",
             command=self.export_recorded_files_bundle,
             fg_color="#22aa66",
@@ -4088,14 +4641,389 @@ class PATConverterApp(ctk.CTk):
         btns.pack(fill=ctk.X, padx=2, pady=(0, 4))
         ctk.CTkButton(btns, text="Graficos PNG", command=self.export_project_graph_images, width=120, fg_color="#225588").pack(side=ctk.LEFT, padx=3, expand=True, fill=ctk.X)
         ctk.CTkButton(btns, text="Tabelas PNG", command=self.export_project_table_images, width=120, fg_color="#664488").pack(side=ctk.LEFT, padx=3, expand=True, fill=ctk.X)
+        ctk.CTkButton(btns, text="Relatorio PDF", command=self.open_report_pdf_export, width=130, fg_color="#2277bb").pack(side=ctk.LEFT, padx=3, expand=True, fill=ctk.X)
         ctk.CTkButton(btns, text="PAT", command=self.export_project_pat_files, width=100, fg_color="#228855").pack(side=ctk.LEFT, padx=3, expand=True, fill=ctk.X)
         ctk.CTkButton(btns, text="PAT ADT", command=self.export_project_adt_files, width=100, fg_color="#22aa88").pack(side=ctk.LEFT, padx=3, expand=True, fill=ctk.X)
         ctk.CTkButton(btns, text="PRN", command=self.export_project_prn_files, width=100, fg_color="#aa6622").pack(side=ctk.LEFT, padx=3, expand=True, fill=ctk.X)
 
         self.project_info_box = ctk.CTkTextbox(self.tab_proj, wrap="word")
-        self.project_info_box.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self.project_info_box.pack(fill=ctk.X, expand=False, padx=8, pady=(0, 6))
+        self.project_info_box.configure(height=200)
         self.project_info_box.insert("0.0", "Painel de dados do projeto.")
         self.project_info_box.configure(state="disabled")
+
+        assets = ctk.CTkFrame(self.tab_proj)
+        assets.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
+        head = ctk.CTkFrame(assets, fg_color="transparent")
+        head.pack(fill=ctk.X, padx=4, pady=(4, 2))
+        ctk.CTkLabel(
+            head,
+            text="Arquivos Gerados (Tabelas, Imagens e Diagramas)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side=ctk.LEFT, padx=2)
+        ctk.CTkButton(
+            head,
+            text="Atualizar Itens",
+            width=120,
+            command=self._refresh_project_assets_view,
+            fg_color="#335577",
+        ).pack(side=ctk.RIGHT, padx=2)
+
+        self.project_assets_scroll = ctk.CTkScrollableFrame(assets)
+        self.project_assets_scroll.pack(fill=ctk.BOTH, expand=True, padx=2, pady=(2, 2))
+        self._project_asset_image_refs = []
+
+    def _project_path_key(self, path: str) -> str:
+        try:
+            return os.path.normcase(os.path.abspath(str(path)))
+        except Exception:
+            return str(path or "")
+
+    def _project_asset_category(self, item: dict) -> str:
+        kind = str(item.get("kind", "")).upper()
+        path = str(item.get("path", ""))
+        name = os.path.basename(path).lower()
+        ext = os.path.splitext(name)[1].lower()
+        image_ext = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+        if "TABLE" in kind or "TABELA" in name or ext == ".csv":
+            return "tables"
+        if ext in image_ext:
+            if ("PLOT" in kind) or ("DIAGRAMA" in kind) or ("GRAF" in kind) or ("_plot" in name):
+                return "diagrams"
+            return "images"
+        return "other"
+
+    def _collect_project_asset_items(self) -> dict:
+        grouped = {"tables": [], "diagrams": [], "images": []}
+        seen = set()
+        for item in reversed(self.export_registry):
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path", "")).strip()
+            if not path:
+                continue
+            key = self._project_path_key(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            cat = self._project_asset_category(item)
+            if cat == "other":
+                continue
+            grouped[cat].append(item)
+        return grouped
+
+    def _open_file_path(self, path: str):
+        p = str(path or "").strip()
+        if not p or not os.path.exists(p):
+            messagebox.showwarning("Arquivo ausente", "O arquivo selecionado nao existe mais.")
+            return
+        try:
+            if hasattr(os, "startfile"):
+                os.startfile(p)  # type: ignore[attr-defined]
+            else:
+                messagebox.showinfo("Abrir arquivo", p)
+        except Exception as e:
+            messagebox.showerror("Erro ao abrir arquivo", str(e))
+
+    def _is_image_path(self, path: str) -> bool:
+        ext = os.path.splitext(str(path or ""))[1].lower()
+        return ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+
+    def _open_project_asset_preview_modal(self, item: dict):
+        path = str(item.get("path", "")).strip()
+        if not path or not os.path.exists(path):
+            messagebox.showwarning("Arquivo ausente", "O arquivo selecionado nao existe mais.")
+            return
+
+        title = os.path.basename(path) or "Visualizacao"
+        w = ctk.CTkToplevel(self)
+        w.title(f"Visualizacao - {title}")
+        w.geometry("1100x760")
+        w.transient(self)
+        try:
+            w.grab_set()
+        except Exception:
+            pass
+        try:
+            w.focus_force()
+        except Exception:
+            pass
+
+        top = ctk.CTkFrame(w, fg_color="transparent")
+        top.pack(fill=ctk.X, padx=8, pady=(8, 4))
+        ctk.CTkLabel(top, text=title, font=ctk.CTkFont(weight="bold")).pack(side=ctk.LEFT, padx=4)
+        ctk.CTkButton(top, text="Abrir arquivo", width=110, command=lambda p=path: self._open_file_path(p)).pack(side=ctk.RIGHT, padx=3)
+        ctk.CTkButton(top, text="Fechar", width=90, command=w.destroy).pack(side=ctk.RIGHT, padx=3)
+
+        body = ctk.CTkFrame(w)
+        body.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        if self._is_image_path(path):
+            try:
+                pil = Image.open(path)
+            except Exception as e:
+                messagebox.showerror("Erro ao abrir imagem", str(e))
+                w.destroy()
+                return
+
+            iw, ih = pil.size
+            ctk.CTkLabel(
+                body,
+                text=f"Tamanho real: {iw} x {ih} px",
+                anchor="w",
+                text_color="#8aa2b8",
+            ).pack(fill=ctk.X, padx=8, pady=(6, 4))
+
+            canvas_wrap = ctk.CTkFrame(body)
+            canvas_wrap.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
+            canvas_wrap.grid_rowconfigure(0, weight=1)
+            canvas_wrap.grid_columnconfigure(0, weight=1)
+
+            canvas = tk.Canvas(canvas_wrap, highlightthickness=0)
+            canvas.grid(row=0, column=0, sticky="nsew")
+            xbar = ctk.CTkScrollbar(canvas_wrap, orientation="horizontal", command=canvas.xview)
+            xbar.grid(row=1, column=0, sticky="ew")
+            ybar = ctk.CTkScrollbar(canvas_wrap, orientation="vertical", command=canvas.yview)
+            ybar.grid(row=0, column=1, sticky="ns")
+            canvas.configure(xscrollcommand=xbar.set, yscrollcommand=ybar.set)
+
+            photo = ImageTk.PhotoImage(pil)
+            canvas.create_image(0, 0, anchor="nw", image=photo)
+            canvas.configure(scrollregion=(0, 0, iw, ih))
+
+            # Keep references alive while modal is open.
+            w._preview_photo = photo
+            w._preview_pil = pil
+        else:
+            ctk.CTkLabel(
+                body,
+                text="Visualizacao textual do artefato",
+                anchor="w",
+                text_color="#8aa2b8",
+            ).pack(fill=ctk.X, padx=8, pady=(6, 4))
+            txt = ctk.CTkTextbox(body, wrap="none")
+            txt.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read(400_000)
+            except Exception as e:
+                content = f"Nao foi possivel visualizar o arquivo em texto.\n\nErro: {e}"
+            txt.insert("0.0", content)
+            txt.configure(state="disabled")
+
+    def _project_asset_save_as(self, item: dict):
+        src = str(item.get("path", "")).strip()
+        if not src or not os.path.exists(src):
+            messagebox.showwarning("Arquivo ausente", "O arquivo selecionado nao existe mais.")
+            return
+        default_name = os.path.basename(src)
+        dst = filedialog.asksaveasfilename(
+            title="Salvar arquivo como",
+            initialfile=default_name,
+            defaultextension=os.path.splitext(default_name)[1] or "",
+            filetypes=[("Todos os arquivos", "*.*")],
+        )
+        if not dst:
+            return
+        try:
+            shutil.copy2(src, dst)
+            self._set_status(f"Arquivo salvo: {dst}")
+        except Exception as e:
+            messagebox.showerror("Erro ao salvar arquivo", str(e))
+
+    def _project_asset_export_to_dir(self, item: dict):
+        src = str(item.get("path", "")).strip()
+        if not src or not os.path.exists(src):
+            messagebox.showwarning("Arquivo ausente", "O arquivo selecionado nao existe mais.")
+            return
+        out_dir = filedialog.askdirectory(title="Escolha a pasta de exportacao")
+        if not out_dir:
+            return
+        try:
+            dst = os.path.join(out_dir, os.path.basename(src))
+            shutil.copy2(src, dst)
+            self._set_status(f"Arquivo exportado: {dst}")
+        except Exception as e:
+            messagebox.showerror("Erro ao exportar arquivo", str(e))
+
+    def _project_remove_registry_by_path(self, path: str):
+        key = self._project_path_key(path)
+        new_registry = []
+        removed = 0
+        for it in self.export_registry:
+            p = str(it.get("path", ""))
+            if self._project_path_key(p) == key:
+                removed += 1
+                continue
+            new_registry.append(it)
+        self.export_registry = new_registry
+        if removed:
+            self._refresh_project_overview()
+
+    def _project_asset_rename(self, item: dict):
+        src = str(item.get("path", "")).strip()
+        if not src or not os.path.exists(src):
+            messagebox.showwarning("Arquivo ausente", "O arquivo selecionado nao existe mais.")
+            return
+        old_key = self._project_path_key(src)
+        base = os.path.basename(src)
+        stem, ext = os.path.splitext(base)
+        new_stem = simpledialog.askstring(
+            "Renomear arquivo",
+            "Novo nome (sem extensao):",
+            initialvalue=stem,
+            parent=self,
+        )
+        if new_stem is None:
+            return
+        new_stem = str(new_stem).strip()
+        if not new_stem:
+            messagebox.showwarning("Renomear", "Nome invalido.")
+            return
+        dst = os.path.join(os.path.dirname(src), f"{new_stem}{ext}")
+        if self._project_path_key(dst) == old_key:
+            return
+        if os.path.exists(dst):
+            messagebox.showwarning("Renomear", "Ja existe arquivo com este nome.")
+            return
+        try:
+            os.replace(src, dst)
+            for it in self.export_registry:
+                p = str(it.get("path", ""))
+                if self._project_path_key(p) == old_key:
+                    it["path"] = os.path.abspath(dst)
+            self._refresh_project_overview()
+            self._set_status(f"Arquivo renomeado: {os.path.basename(dst)}")
+        except Exception as e:
+            messagebox.showerror("Erro ao renomear", str(e))
+
+    def _project_asset_delete(self, item: dict):
+        src = str(item.get("path", "")).strip()
+        if not src:
+            return
+        if not messagebox.askyesno("Excluir arquivo", f"Excluir permanentemente?\n{src}"):
+            return
+        try:
+            if os.path.exists(src):
+                os.remove(src)
+            self._project_remove_registry_by_path(src)
+            self._set_status(f"Arquivo excluido: {os.path.basename(src)}")
+        except Exception as e:
+            messagebox.showerror("Erro ao excluir arquivo", str(e))
+
+    def _project_asset_remove_from_panel(self, item: dict):
+        src = str(item.get("path", "")).strip()
+        if not src:
+            return
+        self._project_remove_registry_by_path(src)
+        self._set_status(f"Item removido do painel: {os.path.basename(src)}")
+
+    def _show_project_asset_menu(self, event, item: dict):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Abrir", command=lambda it=item: self._open_file_path(it.get("path", "")))
+        menu.add_command(label="Salvar como...", command=lambda it=item: self._project_asset_save_as(it))
+        menu.add_command(label="Exportar para pasta...", command=lambda it=item: self._project_asset_export_to_dir(it))
+        menu.add_separator()
+        menu.add_command(label="Renomear arquivo...", command=lambda it=item: self._project_asset_rename(it))
+        menu.add_command(label="Excluir arquivo", command=lambda it=item: self._project_asset_delete(it))
+        menu.add_command(label="Remover do painel", command=lambda it=item: self._project_asset_remove_from_panel(it))
+        try:
+            menu.tk_popup(int(event.x_root), int(event.y_root))
+            menu.grab_release()
+        except Exception:
+            pass
+        return "break"
+
+    def _add_project_asset_card(self, parent, item: dict, category_label: str):
+        frame = ctk.CTkFrame(parent)
+        frame.pack(fill=ctk.X, padx=4, pady=4)
+        path = str(item.get("path", ""))
+        kind = str(item.get("kind", "-"))
+        timestamp = str(item.get("timestamp", "-"))
+        exists = os.path.exists(path)
+        name = os.path.basename(path) if path else "(sem caminho)"
+        ext = os.path.splitext(name)[1].lower()
+
+        row = ctk.CTkFrame(frame, fg_color="transparent")
+        row.pack(fill=ctk.X, padx=6, pady=6)
+
+        preview_holder = ctk.CTkFrame(row, width=116, height=66, fg_color="#1f1f1f")
+        preview_holder.pack(side=ctk.LEFT, padx=(0, 8))
+        preview_holder.pack_propagate(False)
+
+        image_ext = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+        preview_widgets = [preview_holder]
+        if exists and ext in image_ext:
+            try:
+                pil = Image.open(path).convert("RGB")
+                pil.thumbnail((112, 62))
+                ctk_img = ctk.CTkImage(light_image=pil, dark_image=pil, size=pil.size)
+                self._project_asset_image_refs.append(ctk_img)
+                lbl_preview = ctk.CTkLabel(preview_holder, text="", image=ctk_img)
+                lbl_preview.pack(expand=True, fill=ctk.BOTH)
+                preview_widgets.append(lbl_preview)
+            except Exception:
+                lbl_preview = ctk.CTkLabel(preview_holder, text="IMG")
+                lbl_preview.pack(expand=True)
+                preview_widgets.append(lbl_preview)
+        else:
+            lbl_preview = ctk.CTkLabel(preview_holder, text=ext.upper().replace(".", "") or "FILE")
+            lbl_preview.pack(expand=True)
+            preview_widgets.append(lbl_preview)
+
+        info = ctk.CTkFrame(row, fg_color="transparent")
+        info.pack(side=ctk.LEFT, fill=ctk.X, expand=True)
+        ctk.CTkLabel(info, text=name, anchor="w", font=ctk.CTkFont(weight="bold")).pack(fill=ctk.X)
+        ctk.CTkLabel(info, text=f"{category_label} | {kind} | {timestamp}", anchor="w", text_color="#8aa2b8").pack(fill=ctk.X)
+        ctk.CTkLabel(info, text=path or "-", anchor="w").pack(fill=ctk.X)
+        ctk.CTkLabel(info, text=("OK" if exists else "AUSENTE"), anchor="w", text_color=("#66cc88" if exists else "#dd6666")).pack(fill=ctk.X)
+
+        widgets = [frame, row, preview_holder, info]
+        widgets.extend(preview_holder.winfo_children())
+        widgets.extend(info.winfo_children())
+        for w in widgets:
+            w.bind("<Button-3>", lambda e, it=item: self._show_project_asset_menu(e, it), add="+")
+            w.bind("<Button-2>", lambda e, it=item: self._show_project_asset_menu(e, it), add="+")
+            w.bind("<Double-Button-1>", lambda e, p=path: self._open_file_path(p), add="+")
+        for w in preview_widgets:
+            w.bind("<Button-1>", lambda e, it=item: self._open_project_asset_preview_modal(it), add="+")
+
+    def _refresh_project_assets_view(self):
+        panel = getattr(self, "project_assets_scroll", None)
+        if panel is None:
+            return
+        for ch in panel.winfo_children():
+            ch.destroy()
+        self._project_asset_image_refs = []
+
+        data = self._collect_project_asset_items()
+        sections = [
+            ("tables", "Tabelas Geradas"),
+            ("diagrams", "Diagramas (Imagens)"),
+            ("images", "Imagens Geradas"),
+        ]
+
+        total = 0
+        for key, title in sections:
+            items = data.get(key, [])
+            if not items:
+                continue
+            total += len(items)
+            box = ctk.CTkFrame(panel)
+            box.pack(fill=ctk.X, padx=4, pady=(4, 8))
+            ctk.CTkLabel(
+                box,
+                text=f"{title} ({len(items)})",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(anchor="w", padx=6, pady=(6, 2))
+            for it in items:
+                self._add_project_asset_card(box, it, title)
+
+        if total == 0:
+            ctk.CTkLabel(
+                panel,
+                text="Nenhum arquivo gerado encontrado no registro de exportacoes.",
+            ).pack(anchor="w", padx=8, pady=10)
 
     def _refresh_project_overview(self):
         if not hasattr(self, "project_info_box"):
@@ -4177,6 +5105,7 @@ class PATConverterApp(ctk.CTk):
         self.project_info_box.delete("0.0", "end")
         self.project_info_box.insert("0.0", "\n".join(lines))
         self.project_info_box.configure(state="disabled")
+        self._refresh_project_assets_view()
 
     def _register_export(self, path: str, kind: str):
         if not path:
@@ -4481,6 +5410,410 @@ class PATConverterApp(ctk.CTk):
         v_interp = np.interp(np.mod(target, 360.0), s_ang_ext, s_val_ext)
         return target, v_interp
 
+    def _write_project_table_csv(self, path: str, angles: np.ndarray, values_linear: np.ndarray):
+        a = np.asarray(angles, dtype=float).reshape(-1)
+        v = np.asarray(values_linear, dtype=float).reshape(-1)
+        if a.size == 0 or v.size == 0 or a.size != v.size:
+            raise ValueError("Dados invalidos para tabela CSV.")
+        vals_db = linear_to_db(v)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            wr = csv.writer(f)
+            wr.writerow(["Angle_deg", "Level_linear", "Level_dB"])
+            for a_i, v_i, d_i in zip(a, v, vals_db):
+                wr.writerow([f"{float(a_i):.3f}", f"{float(v_i):.8f}", f"{float(d_i):.4f}"])
+
+    def _artifact_set_progress(self, current: int, total: int, label: str):
+        with self._artifact_lock:
+            self._artifact_progress = {
+                "current": max(0, int(current)),
+                "total": max(1, int(total)),
+                "label": str(label),
+            }
+
+    def _artifact_get_progress(self) -> dict:
+        with self._artifact_lock:
+            return dict(self._artifact_progress)
+
+    def generate_all_project_artifacts(self):
+        if self._any_export_task_running():
+            messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
+            return
+
+        root = self.output_dir or filedialog.askdirectory(title="Escolha a pasta para gerar todos os artefatos")
+        if not root:
+            return
+        base = self._project_base_name()
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.join(root, f"{base}_artefatos_{stamp}")
+        os.makedirs(out_dir, exist_ok=True)
+
+        job = {"root": out_dir, "base": base}
+        self.task_cancel_event.clear()
+        self._artifact_set_progress(0, 1, "Iniciando geracao de artefatos...")
+        self._task_ui_start("Gerando todos os artefatos do projeto...", 1)
+        self.artifacts_future = self.export_executor.submit(self._generate_all_project_artifacts_worker, job)
+        self._poll_generate_all_project_artifacts()
+
+    def _poll_generate_all_project_artifacts(self):
+        if not self.artifacts_future:
+            return
+        p = self._artifact_get_progress()
+        self._task_ui_progress(p.get("current", 0), p.get("total", 1), p.get("label", "Executando..."))
+        if self.artifacts_future.done():
+            self._finalize_generate_all_project_artifacts()
+            return
+        self.after(140, self._poll_generate_all_project_artifacts)
+
+    def _finalize_generate_all_project_artifacts(self):
+        fut = self.artifacts_future
+        self.artifacts_future = None
+        if fut is None:
+            self._task_ui_finish("Geracao de artefatos finalizada.")
+            return
+
+        try:
+            res = fut.result()
+        except Exception as e:
+            LOGGER.exception("Falha ao gerar artefatos do projeto.")
+            self._task_ui_finish("Falha na geracao de artefatos.")
+            messagebox.showerror("Erro", f"Falha ao gerar artefatos: {e}")
+            return
+
+        exported = list(res.get("exported", []))
+        warnings = list(res.get("warnings", []))
+        cancelled = bool(res.get("cancelled", False))
+        root = str(res.get("root", ""))
+        manifest_json = str(res.get("manifest_json", ""))
+        manifest_csv = str(res.get("manifest_csv", ""))
+
+        for item in exported:
+            try:
+                self._register_export(item.get("path", ""), item.get("kind", "PROJECT_ARTIFACT"))
+            except Exception:
+                continue
+
+        status = f"Artefatos gerados: {len(exported)} arquivo(s)."
+        if cancelled:
+            status += " Operacao cancelada."
+        self._task_ui_finish(status)
+
+        lines = [status]
+        if root:
+            lines.append(f"Pasta: {root}")
+        if manifest_json:
+            lines.append(f"Manifesto JSON: {manifest_json}")
+        if manifest_csv:
+            lines.append(f"Manifesto CSV: {manifest_csv}")
+        if warnings:
+            lines.append("")
+            lines.append(f"Avisos ({len(warnings)}):")
+            lines.extend([f"- {w}" for w in warnings[:12]])
+        if cancelled:
+            messagebox.showwarning("Geracao de Artefatos", "\n".join(lines))
+        else:
+            messagebox.showinfo("Geracao de Artefatos", "\n".join(lines))
+
+    def _generate_all_project_artifacts_worker(self, job: dict) -> dict:
+        root = str(job.get("root", os.getcwd()))
+        base = str(job.get("base", self._project_base_name()))
+        patterns = self._collect_project_patterns()
+        pairs = self._collect_project_prn_pairs()
+        warnings = []
+        exported = []
+        cancelled = False
+
+        if not patterns and not pairs:
+            raise ValueError("Nao ha dados suficientes no projeto para gerar artefatos.")
+
+        has_file_pair = (
+            self.h_angles is not None and self.h_vals is not None
+            and self.v_angles is not None and self.v_vals is not None
+        )
+        has_harness = self.vert_synth_result is not None and self.vert_harness is not None
+        report_template = self._resolve_report_template_path()
+        can_report = bool(patterns) and os.path.isfile(report_template)
+        if patterns and not can_report:
+            warnings.append(f"Template PDF nao encontrado para relatorio: {report_template}")
+
+        total_steps = len(patterns) * 5 + len(pairs) + 1
+        if has_file_pair:
+            total_steps += 1
+        if has_harness:
+            total_steps += 1
+        if can_report:
+            total_steps += 1
+        total_steps = max(total_steps, 1)
+        step = 0
+
+        def _is_cancelled() -> bool:
+            return self.task_cancel_event.is_set()
+
+        def _step(label: str):
+            nonlocal step
+            step += 1
+            self._artifact_set_progress(step, total_steps, label)
+
+        os.makedirs(root, exist_ok=True)
+        out_graph = os.path.join(root, "graficos")
+        out_table = os.path.join(root, "tabelas")
+        out_pat = os.path.join(root, "pat")
+        out_adt = os.path.join(root, "pat_adt")
+        out_prn = os.path.join(root, "prn")
+        out_report = os.path.join(root, "relatorio")
+        out_harness = os.path.join(root, "harness")
+        for d in (out_graph, out_table, out_pat, out_adt, out_prn, out_report):
+            os.makedirs(d, exist_ok=True)
+        if has_harness:
+            os.makedirs(out_harness, exist_ok=True)
+
+        generated_plot_paths: Dict[str, str] = {}
+
+        # Graficos + tabelas + PAT + ADT por corte.
+        for tag, kind, angles, values in patterns:
+            if _is_cancelled():
+                cancelled = True
+                break
+            try:
+                fig, _ = build_diagram_export_figure(
+                    kind=kind,
+                    angles=angles,
+                    values=values,
+                    title=f"Diagrama {tag.upper()} ({'Azimute' if kind == 'H' else 'Elevacao'})",
+                    prefer_polar=(kind == "H"),
+                )
+                p_plot = os.path.join(out_graph, f"{base}_{tag}_plot.png")
+                fig.savefig(p_plot, dpi=300)
+                generated_plot_paths[tag] = p_plot
+                exported.append({"kind": f"ART_{tag.upper()}_PLOT", "path": p_plot})
+            except Exception as e:
+                warnings.append(f"Grafico {tag}: {e}")
+            _step(f"Grafico: {tag}")
+
+            if _is_cancelled():
+                cancelled = True
+                break
+            try:
+                if kind == "V":
+                    t_ang, t_val = self._table_points_vertical(angles, values)
+                    title = f"Tabela {tag.upper()} - Vertical"
+                    color = "#4e79a7"
+                else:
+                    t_ang, t_val = self._table_points_horizontal(angles, values)
+                    title = f"Tabela {tag.upper()} - Horizontal"
+                    color = "#f28e2b"
+
+                p_csv = os.path.join(out_table, f"{base}_{tag}_tabela.csv")
+                self._write_project_table_csv(p_csv, t_ang, t_val)
+                exported.append({"kind": f"ART_{tag.upper()}_TABLE_CSV", "path": p_csv})
+
+                img = render_table_image(t_ang, linear_to_db(t_val), "dB", color, title)
+                p_png = os.path.join(out_table, f"{base}_{tag}_tabela.png")
+                img.save(p_png)
+                exported.append({"kind": f"ART_{tag.upper()}_TABLE_PNG", "path": p_png})
+            except Exception as e:
+                warnings.append(f"Tabela {tag}: {e}")
+            _step(f"Tabela: {tag}")
+
+            if _is_cancelled():
+                cancelled = True
+                break
+            try:
+                p_pat = os.path.join(out_pat, f"{base}_{tag}.pat")
+                if kind == "V":
+                    try:
+                        a_out, v_out = resample_vertical(angles, values, norm="none")
+                    except Exception:
+                        a_out, v_out = _resample_vertical_adt(angles, values)
+                    write_pat_vertical_new_format(p_pat, f"{base} {tag}", 0.0, 1, a_out, v_out, step=1)
+                else:
+                    a_out, v_out = resample_horizontal(angles, values, norm="none")
+                    write_pat_horizontal_new_format(p_pat, f"{base} {tag}", 0.0, 1, a_out, v_out, step=1)
+                exported.append({"kind": f"ART_{tag.upper()}_PAT", "path": p_pat})
+            except Exception as e:
+                warnings.append(f"PAT {tag}: {e}")
+            _step(f"PAT: {tag}")
+
+            if _is_cancelled():
+                cancelled = True
+                break
+            try:
+                p_adt = os.path.join(out_adt, f"{base}_{tag}_ADT.pat")
+                write_pat_adt_format(p_adt, f"{base} {tag}", angles, values, pattern_type=kind)
+                exported.append({"kind": f"ART_{tag.upper()}_ADT", "path": p_adt})
+            except Exception as e:
+                warnings.append(f"ADT {tag}: {e}")
+            _step(f"PAT ADT: {tag}")
+
+            if _is_cancelled():
+                cancelled = True
+                break
+            _step(f"Corte concluido: {tag}")
+
+        # PAT convencional combinado HRP+VRP (arquivo base), quando disponivel.
+        if not cancelled and has_file_pair:
+            try:
+                p_comb = os.path.join(out_pat, f"{base}_all_conventional.pat")
+                write_pat_conventional_combined(
+                    path=p_comb,
+                    description=f"{base} ALL",
+                    gain=0.0,
+                    num_antennas=1,
+                    h_angles=self.h_angles,
+                    h_values=self.h_vals,
+                    v_angles=self.v_angles,
+                    v_values=self.v_vals,
+                )
+                exported.append({"kind": "ART_ALL_CONVENTIONAL_PAT", "path": p_comb})
+            except Exception as e:
+                warnings.append(f"PAT convencional combinado: {e}")
+            _step("PAT combinado")
+
+        # PRN para todos os pares disponiveis.
+        if not cancelled:
+            name_base = self.prn_name.get().strip() or "ANTENA_FM"
+            make = self.prn_make.get().strip() or "RFS"
+            freq = self._safe_meta_float(self.prn_freq.get(), 99.50)
+            freq_unit = self.prn_freq_unit.get()
+            gain = self._safe_meta_float(self.prn_gain.get(), 2.77)
+            h_width = self._safe_meta_float(self.prn_h_width.get(), 65.0)
+            v_width = self._safe_meta_float(self.prn_v_width.get(), 45.0)
+            fb_ratio = self._safe_meta_float(self.prn_fb_ratio.get(), 25.0)
+
+            for tag, h_ang, h_val, v_ang, v_val in pairs:
+                if _is_cancelled():
+                    cancelled = True
+                    break
+                try:
+                    h_out, hv = resample_horizontal(h_ang, h_val, norm="none")
+                    try:
+                        v_out, vv = resample_vertical(v_ang, v_val, norm="none")
+                    except Exception:
+                        v_out, vv = _resample_vertical_adt(v_ang, v_val)
+                    prn_name = f"{name_base}_{tag.upper()}"
+                    p_prn = os.path.join(out_prn, f"{base}_{tag}.prn")
+                    write_prn_file(
+                        p_prn,
+                        prn_name,
+                        make,
+                        freq,
+                        freq_unit,
+                        h_width,
+                        v_width,
+                        fb_ratio,
+                        gain,
+                        h_out,
+                        hv,
+                        v_out,
+                        vv,
+                    )
+                    exported.append({"kind": f"ART_{tag.upper()}_PRN", "path": p_prn})
+                except Exception as e:
+                    warnings.append(f"PRN {tag}: {e}")
+                _step(f"PRN: {tag}")
+
+        # Harness de null fill, quando disponivel.
+        if not cancelled and has_harness:
+            try:
+                items = self._export_vertical_harness_to_dir(out_harness, base)
+                for kind, p in items:
+                    exported.append({"kind": f"ART_{kind}", "path": p})
+            except Exception as e:
+                warnings.append(f"Harness: {e}")
+            _step("Harness")
+
+        # Relatorio PDF.
+        if not cancelled and can_report:
+            try:
+                pages = []
+                for tag, kind, angles, values in patterns:
+                    plot_path = generated_plot_paths.get(tag, "")
+                    if not plot_path or not os.path.exists(plot_path):
+                        fig, _ = build_diagram_export_figure(
+                            kind=kind,
+                            angles=angles,
+                            values=values,
+                            title=f"Diagrama {tag.upper()}",
+                            prefer_polar=(kind == "H"),
+                        )
+                        plot_path = os.path.join(out_graph, f"{base}_{tag}_plot.png")
+                        fig.savefig(plot_path, dpi=300)
+                    t_ang, t_val = _prepare_pattern_for_export(kind, angles, values)
+                    m = compute_diagram_metrics(kind, t_ang, t_val)
+                    rows = [[float(a_i), float(d_i)] for a_i, d_i in zip(t_ang, linear_to_db(t_val))]
+                    pages.append(
+                        {
+                            "page_title": f"Diagrama {tag.upper()} ({'Azimute' if kind == 'H' else 'Elevacao'})",
+                            "page_subtitle": self._report_page_subtitle(tag, kind),
+                            "plot_image_path": plot_path,
+                            "metrics": m,
+                            "table": {
+                                "columns": ["Ang [deg]", "Valor [dB]"],
+                                "rows": rows,
+                                "note": "Tabela exibida compactada quando necessario; CSV completo salvo junto.",
+                            },
+                        }
+                    )
+                report_path = os.path.join(out_report, f"{base}_relatorio.pdf")
+                report_csv_dir = os.path.join(out_report, "tabelas_csv")
+                rep = export_report_pdf(
+                    payload={"report_title": f"Relatorio {base}", "author": self.author_var.get().strip() or "EFTX", "pages": pages},
+                    output_pdf_path=report_path,
+                    template_pdf_path=report_template,
+                    save_full_csv=True,
+                    csv_output_dir=report_csv_dir,
+                    max_display_rows=80,
+                    cancel_check=_is_cancelled,
+                    logger=LOGGER,
+                )
+                exported.append({"kind": "ART_REPORT_PDF", "path": report_path})
+                for p_csv in rep.get("csv_files", []):
+                    exported.append({"kind": "ART_REPORT_TABLE_CSV", "path": p_csv})
+                for w in rep.get("warnings", []):
+                    warnings.append(f"Relatorio: {w}")
+            except Exception as e:
+                warnings.append(f"Relatorio PDF: {e}")
+            _step("Relatorio PDF")
+
+        manifest_json = os.path.join(root, "manifesto_artefatos.json")
+        manifest_csv = os.path.join(root, "manifesto_artefatos.csv")
+        try:
+            atomic_write_text(
+                manifest_json,
+                json.dumps(
+                    {
+                        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+                        "base": base,
+                        "root": root,
+                        "cancelled": cancelled,
+                        "warnings": warnings,
+                        "files": exported,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
+            csv_buf = StringIO()
+            wr = csv.writer(csv_buf, lineterminator="\n")
+            wr.writerow(["kind", "path"])
+            for it in exported:
+                wr.writerow([it.get("kind", ""), it.get("path", "")])
+            atomic_write_text(manifest_csv, csv_buf.getvalue())
+        except Exception as e:
+            warnings.append(f"Manifesto: {e}")
+            manifest_json = ""
+            manifest_csv = ""
+        _step("Manifesto")
+
+        self._artifact_set_progress(total_steps, total_steps, "Geracao de artefatos finalizada.")
+        return {
+            "root": root,
+            "exported": exported,
+            "warnings": warnings,
+            "cancelled": cancelled,
+            "manifest_json": manifest_json,
+            "manifest_csv": manifest_csv,
+        }
+
     def export_project_graph_images(self):
         out_dir = self._project_prepare_export_dir("graficos")
         if not out_dir:
@@ -4523,7 +5856,8 @@ class PATConverterApp(ctk.CTk):
             messagebox.showwarning("Sem dados", "Nao ha diagramas disponiveis para exportar tabelas.")
             return
 
-        exported = 0
+        exported_png = 0
+        exported_csv = 0
         for tag, kind, angles, values in patterns:
             try:
                 if kind == "V":
@@ -4535,18 +5869,25 @@ class PATConverterApp(ctk.CTk):
                     title = f"Tabela {tag.upper()} - Horizontal"
                     color = "#f28e2b"
 
+                csv_path = os.path.join(out_dir, f"{base}_{tag}_tabela.csv")
+                self._write_project_table_csv(csv_path, t_ang, t_val)
+                self._register_export(csv_path, f"PROJECT_{tag.upper()}_TABLE_CSV")
+                exported_csv += 1
+
                 img = render_table_image(t_ang, linear_to_db(t_val), "dB", color, title)
-                path = os.path.join(out_dir, f"{base}_{tag}_tabela.png")
-                img.save(path)
-                self._register_export(path, f"PROJECT_{tag.upper()}_TABLE")
-                exported += 1
+                png_path = os.path.join(out_dir, f"{base}_{tag}_tabela.png")
+                img.save(png_path)
+                self._register_export(png_path, f"PROJECT_{tag.upper()}_TABLE_PNG")
+                exported_png += 1
             except Exception as e:
                 messagebox.showwarning("Aviso", f"Falha ao gerar tabela '{tag}': {e}")
 
-        if exported == 0:
+        if exported_png == 0 and exported_csv == 0:
             messagebox.showwarning("Sem exportacao", "Nenhuma tabela foi exportada.")
             return
-        self._set_status(f"Exportacao de tabelas concluida: {exported} arquivo(s) em {out_dir}.")
+        self._set_status(
+            f"Exportacao de tabelas concluida: PNG={exported_png}, CSV={exported_csv} em {out_dir}."
+        )
 
     def export_project_pat_files(self):
         out_dir = self._project_prepare_export_dir("pat")
