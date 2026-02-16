@@ -6,6 +6,7 @@ CTk PAT Converter — Arquivo | Array Vertical | Painéis Horizontais
 from __future__ import annotations
 
 import os
+import sys
 import re
 import math
 import csv
@@ -17,6 +18,8 @@ import shutil
 import tempfile
 import logging
 import threading
+import time
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 from io import StringIO
@@ -32,6 +35,24 @@ matplotlib.use("Agg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from null_fill_synthesis import synth_null_fill_by_order, weights_to_harness
+from ui.tabs.tab_advanced_viz import AdvancedVisualizationTab
+from core.perf import PerfTracer
+
+# Ensure root/plugins are importable for drop-in integrations.
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+PLUGINS_DIR = os.path.join(ROOT_DIR, "plugins")
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+if os.path.isdir(PLUGINS_DIR) and PLUGINS_DIR not in sys.path:
+    sys.path.insert(0, PLUGINS_DIR)
+
+try:
+    from plugins.aedt_live.aedt_live_plugin import register_aedt_live_tab
+except Exception:
+    try:
+        from aedt_live_plugin import register_aedt_live_tab
+    except Exception:
+        register_aedt_live_tab = None
 
 # ----------------------------- Constantes ----------------------------- #
 C0 = 299_792_458.0  # m/s
@@ -62,6 +83,7 @@ def setup_logging() -> logging.Logger:
 
 
 LOGGER = setup_logging()
+PERF = PerfTracer(LOGGER, threshold_s=0.010)
 
 
 def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
@@ -532,6 +554,9 @@ class PlotInteractor:
         on_measure_update=None,
         on_status=None,
         on_context_menu=None,
+        tracer: Optional[PerfTracer] = None,
+        drag_hz: float = 60.0,
+        table_refresh_ms: float = 200.0,
     ):
         self.ax = ax
         self.canvas = canvas
@@ -541,12 +566,19 @@ class PlotInteractor:
         self.on_measure_update = on_measure_update
         self.on_status = on_status
         self.on_context_menu = on_context_menu
+        self.tracer = tracer or PERF
 
         self.markerA = None
         self.markerB = None
         self.active = None
         self.dragging = False
         self._order = 0
+        self._last_motion_ts = 0.0
+        self._last_emit_ts = 0.0
+        self._drag_interval = 1.0 / max(float(drag_hz), 1.0)
+        self._emit_interval = max(float(table_refresh_ms), 0.0) / 1000.0
+        self._series_cache_key = None
+        self._series_cache = None
 
         self.default_xlim = None if self.polar else tuple(self.ax.get_xlim())
         self.default_ylim = tuple(self.ax.get_ylim())
@@ -563,6 +595,12 @@ class PlotInteractor:
             except Exception:
                 pass
 
+    def _focus_canvas(self):
+        try:
+            self.canvas.get_tk_widget().focus_set()
+        except Exception:
+            pass
+
     def _event_theta_deg(self, event):
         if self.polar:
             if event.xdata is None:
@@ -575,7 +613,7 @@ class PlotInteractor:
             return None
         return float(event.xdata)
 
-    def _nearest_point(self, theta_deg: float):
+    def _get_series_cache(self):
         ang, val = self.get_series()
         if ang is None or val is None:
             return None
@@ -583,6 +621,58 @@ class PlotInteractor:
         v = np.asarray(val, dtype=float).reshape(-1)
         if a.size == 0 or v.size == 0 or a.size != v.size:
             return None
+
+        if self.kind == "H":
+            a = ((a + 180.0) % 360.0) - 180.0
+
+        key = (
+            id(ang),
+            id(val),
+            int(a.size),
+            float(a[0]),
+            float(a[-1]),
+        )
+        if self._series_cache_key == key and self._series_cache is not None:
+            return self._series_cache
+
+        idx = np.argsort(a)
+        a = a[idx]
+        v = v[idx]
+
+        uniform = None
+        if a.size >= 3:
+            d = np.diff(a)
+            step = float(np.median(np.abs(d)))
+            if step > 1e-12:
+                max_dev = float(np.max(np.abs(np.abs(d) - step)))
+                if max_dev <= max(step * 0.05, 1e-6):
+                    uniform = (float(a[0]), step, int(a.size))
+
+        self._series_cache_key = key
+        self._series_cache = {"a": a, "v": v, "uniform": uniform}
+        return self._series_cache
+
+    def _nearest_point(self, theta_deg: float):
+        cache = self._get_series_cache()
+        if cache is None:
+            return None
+        a = cache["a"]
+        v = cache["v"]
+        uniform = cache["uniform"]
+
+        if uniform is not None:
+            start, step, n = uniform
+            x = float(theta_deg)
+            if self.kind == "H":
+                span = step * (n - 1)
+                while x < start:
+                    x += 360.0
+                while x > start + span:
+                    x -= 360.0
+            idx = int(round((x - start) / step))
+            idx = max(0, min(n - 1, idx))
+            return float(a[idx]), float(v[idx])
+
         if self.kind == "H":
             d = np.abs(((a - theta_deg + 180.0) % 360.0) - 180.0)
             idx = int(np.argmin(d))
@@ -595,12 +685,34 @@ class PlotInteractor:
             return float(abs(((t2 - t1 + 180.0) % 360.0) - 180.0))
         return float(abs(t2 - t1))
 
-    def _hit_marker(self, theta_deg: float, tol_deg: float = 2.0):
+    def _marker_xy_pixels(self, mk):
+        if not mk:
+            return None
+        theta = float(mk["theta_deg"])
+        r = float(max(mk["v_lin"], 0.0))
+        if self.polar:
+            th = np.deg2rad(theta if self.kind != "H" else ((theta + 360.0) % 360.0))
+            x, y = self.ax.transData.transform((th, r))
+            return float(x), float(y)
+        y_mid = float(np.mean(self.ax.get_ylim()))
+        x, y = self.ax.transData.transform((theta, y_mid))
+        return float(x), float(y)
+
+    def _hit_marker(self, theta_deg: float, event=None, tol_deg: float = 2.0, tol_px: float = 10.0):
+        ex = float(getattr(event, "x", float("nan"))) if event is not None else float("nan")
+        ey = float(getattr(event, "y", float("nan"))) if event is not None else float("nan")
         for name, mk in (("A", self.markerA), ("B", self.markerB)):
             if not mk:
                 continue
-            d = self._theta_distance(theta_deg, float(mk["theta_deg"]))
-            if d <= tol_deg:
+            d_deg = self._theta_distance(theta_deg, float(mk["theta_deg"]))
+            if math.isfinite(ex) and math.isfinite(ey):
+                xy = self._marker_xy_pixels(mk)
+                if xy is not None:
+                    d_px = math.hypot(float(xy[0]) - ex, float(xy[1]) - ey)
+                    if d_px <= tol_px:
+                        self.active = name
+                        return True
+            if d_deg <= tol_deg:
                 self.active = name
                 return True
         return False
@@ -616,16 +728,23 @@ class PlotInteractor:
         except Exception:
             pass
 
-    def _draw_marker(self, which: str, theta_deg: float, v_lin: float):
+    def _set_marker(self, which: str, theta_deg: float, v_lin: float, emit_update: bool = True):
         prev = self.markerA if which == "A" else self.markerB
-        self._remove_marker_artist(prev)
-
         color = "#d62728" if which == "A" else "#2ca02c"
         if self.polar:
             theta = np.deg2rad(theta_deg if self.kind != "H" else ((theta_deg + 360.0) % 360.0))
-            art = self.ax.plot([theta, theta], [0.0, float(max(v_lin, 0.0))], color=color, linewidth=1.4)[0]
+            r = float(max(v_lin, 0.0))
+            if prev and prev.get("artist") is not None:
+                art = prev["artist"]
+                art.set_data([theta, theta], [0.0, r])
+            else:
+                art = self.ax.plot([theta, theta], [0.0, r], color=color, linewidth=1.4)[0]
         else:
-            art = self.ax.axvline(theta_deg, color=color, linewidth=1.4)
+            if prev and prev.get("artist") is not None:
+                art = prev["artist"]
+                art.set_xdata([theta_deg, theta_deg])
+            else:
+                art = self.ax.axvline(theta_deg, color=color, linewidth=1.4)
 
         data = {
             "which": which,
@@ -639,14 +758,21 @@ class PlotInteractor:
             self.markerA = data
         else:
             self.markerB = data
-        self._emit_measure_update()
+        self.active = which
+        self._emit_measure_update(force=emit_update)
 
-    def _emit_measure_update(self):
+    def _emit_measure_update(self, force: bool = False):
+        now = time.perf_counter()
+        if not force and (now - self._last_emit_ts) < self._emit_interval:
+            return
+        t0 = self.tracer.start()
         if callable(self.on_measure_update):
             try:
                 self.on_measure_update(self.markerA, self.markerB, self.kind)
             except Exception:
                 LOGGER.exception("Falha ao atualizar painel de medicao.")
+        self._last_emit_ts = now
+        self.tracer.log_if_slow("TABLE_REFRESH", t0)
 
     def clear_markers(self):
         self._remove_marker_artist(self.markerA)
@@ -664,29 +790,37 @@ class PlotInteractor:
         self.canvas.draw_idle()
 
     def on_press(self, event):
+        t0 = self.tracer.start()
         if event.inaxes != self.ax:
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra="outside-axes")
             return
+        self._focus_canvas()
 
-        if event.button == 3:
+        if event.button in (2, 3):
             if callable(self.on_context_menu):
                 self.on_context_menu(event, self)
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra="context-menu")
             return
 
         if event.button != 1:
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra=f"button={event.button}")
             return
 
         if bool(getattr(event, "dblclick", False)):
             self.reset_view()
             if callable(self.on_status):
                 self.on_status("View reset.")
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra="dblclick-reset")
             return
 
         theta = self._event_theta_deg(event)
         if theta is None:
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra="theta-none")
             return
 
-        if self._hit_marker(theta):
+        if self._hit_marker(theta, event=event):
             self.dragging = True
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra=f"start-drag-{self.active}")
             return
 
         use_b = bool(getattr(event, "key", None) == "shift")
@@ -701,37 +835,63 @@ class PlotInteractor:
         which = "B" if use_b else "A"
         pt = self._nearest_point(theta)
         if pt is None:
+            self.tracer.log_if_slow("BUTTON_PRESS", t0, extra="nearest-none")
             return
         t_deg, v_lin = pt
         self.active = which
-        self._draw_marker(which, t_deg, v_lin)
+        self._set_marker(which, t_deg, v_lin, emit_update=True)
         self.canvas.draw_idle()
         if callable(self.on_status):
             self.on_status(f"Marker {which}: theta={t_deg:.2f} deg | lin={v_lin:.4f}")
+        self.tracer.log_if_slow("BUTTON_PRESS", t0, extra=f"set-marker-{which}")
 
     def on_release(self, event):
+        t0 = self.tracer.start()
         if event.button == 1:
+            was_dragging = self.dragging
             self.dragging = False
+            if was_dragging:
+                self._emit_measure_update(force=True)
+                self.canvas.draw_idle()
+        self.tracer.log_if_slow("BUTTON_RELEASE", t0)
 
     def on_motion(self, event):
+        t0 = self.tracer.start()
         if event.inaxes != self.ax:
+            self.tracer.log_if_slow("MOUSE_MOVE", t0, extra="outside-axes")
             return
         theta = self._event_theta_deg(event)
         if theta is None:
+            self.tracer.log_if_slow("MOUSE_MOVE", t0, extra="theta-none")
             return
         if not self.dragging or self.active not in ("A", "B"):
+            self.tracer.log_if_slow("MOUSE_MOVE", t0, extra="not-dragging")
             return
+
+        now = time.perf_counter()
+        if (now - self._last_motion_ts) < self._drag_interval:
+            self.tracer.log_if_slow("MOUSE_MOVE", t0, extra="throttled")
+            return
+        self._last_motion_ts = now
+
+        t_drag = self.tracer.start()
         pt = self._nearest_point(theta)
         if pt is None:
+            self.tracer.log_if_slow("MOUSE_MOVE", t0, extra="nearest-none")
             return
         t_deg, v_lin = pt
-        self._draw_marker(self.active, t_deg, v_lin)
+        self._set_marker(self.active, t_deg, v_lin, emit_update=False)
         self.canvas.draw_idle()
         if callable(self.on_status):
             self.on_status(f"Marker {self.active}: theta={t_deg:.2f} deg | lin={v_lin:.4f}")
+        self._emit_measure_update(force=False)
+        self.tracer.log_if_slow("DRAG_MARKER", t_drag, extra=f"active={self.active}")
+        self.tracer.log_if_slow("MOUSE_MOVE", t0, extra="drag-update")
 
     def on_scroll(self, event):
+        t0 = self.tracer.start()
         if event.inaxes != self.ax:
+            self.tracer.log_if_slow("MOUSE_SCROLL", t0, extra="outside-axes")
             return
         base = 1.15
         scale = 1.0 / base if event.button == "up" else base
@@ -749,6 +909,7 @@ class PlotInteractor:
             self.ax.set_xlim(x - (x - xmin) * scale, x + (xmax - x) * scale)
             self.ax.set_ylim(y - (y - ymin) * scale, y + (ymax - y) * scale)
         self.canvas.draw_idle()
+        self.tracer.log_if_slow("MOUSE_SCROLL", t0)
 
 # ----------------------------- Integração e Métricas ----------------------------- #
 def simpson(y: np.ndarray, dx: float) -> float:
@@ -1107,7 +1268,7 @@ class PRNViewerModal(ctk.CTkToplevel):
         ax.plot(theta, h_val)
         ax.set_theta_zero_location('N')
         ax.set_theta_direction(-1)
-        self.canvas_h.draw()
+        self.canvas_h.draw_idle()
         
     def _update_v_plot(self):
         v_ang = self.prn_data["v_angles"]
@@ -1120,18 +1281,25 @@ class PRNViewerModal(ctk.CTkToplevel):
         ax.set_xlabel("Angle [deg]")
         ax.set_ylabel("Linear")
         ax.grid(True, alpha=0.3)
-        self.canvas_v.draw()
+        self.canvas_v.draw_idle()
 
 # ----------------------------- Helpers de exportação PAT ----------------------------- #
 def write_pat_vertical_new_format(path: str, description: str, gain: float, num_antennas: int,
                                   angles: np.ndarray, values: np.ndarray, step: int = 1) -> None:
-    """Escreve arquivo PAT no novo formato para diagrama vertical"""
-    values_db = 20 * np.log10(np.maximum(values, 1e-10))
-    target_angles = np.arange(0, 361, step)
+    """Escreve PAT convencional (linear) para diagrama vertical."""
+    step = int(step) if int(step) > 0 else 1
+    a = np.asarray(angles, dtype=float)
+    v = np.asarray(values, dtype=float)
+    v = np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+    v = np.maximum(v, 0.0)
+    vmax = float(np.max(v)) if v.size else 0.0
+    if vmax > 0.0:
+        v = v / vmax
 
-    angles_0_180 = angles + 90
-    values_0_180 = values_db
-    angles_180_360 = 360 - angles_0_180[::-1]
+    target_angles = np.arange(0, 360, step, dtype=float)
+    angles_0_180 = a + 90.0
+    values_0_180 = v
+    angles_180_360 = 360.0 - angles_0_180[::-1]
     values_180_360 = values_0_180[::-1]
 
     all_angles = np.concatenate([angles_0_180, angles_180_360[1:]])
@@ -1142,32 +1310,94 @@ def write_pat_vertical_new_format(path: str, description: str, gain: float, num_
         target_angles,
         unique_angles,
         unique_values,
-        left=unique_values[0],
-        right=unique_values[-1],
+        left=float(unique_values[0]),
+        right=float(unique_values[-1]),
     )
+    final_values = np.clip(final_values, 0.0, 1.0)
 
-    lines = [f"'{description}',{gain:.2f},{num_antennas}\n"]
+    desc = str(description).replace("'", " ")
+    lines = [f"'{desc}', {gain:.2f}, {int(num_antennas)}\n"]
     for ang, val in zip(target_angles, final_values):
-        if ang <= 360:
-            lines.append(f"{int(ang)},{val:.2f}\n")
+        lines.append(f"{int(round(float(ang)))}, {float(val):.4f}\n")
     atomic_write_text(path, "".join(lines))
 
 
 def write_pat_horizontal_new_format(path: str, description: str, gain: float, num_antennas: int,
                                     angles: np.ndarray, values: np.ndarray, step: int = 1) -> None:
-    """Escreve arquivo PAT no novo formato para diagrama horizontal"""
-    values_db = 20 * np.log10(np.maximum(values, 1e-10))
-    target_angles = np.arange(0, 361, step)
+    """Escreve PAT convencional (linear) para diagrama horizontal."""
+    step = int(step) if int(step) > 0 else 1
+    a = np.asarray(angles, dtype=float)
+    v = np.asarray(values, dtype=float)
+    v = np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+    v = np.maximum(v, 0.0)
+    vmax = float(np.max(v)) if v.size else 0.0
+    if vmax > 0.0:
+        v = v / vmax
 
-    source_angles = (angles + 360) % 360
+    target_angles = np.arange(0, 360, step, dtype=float)
+    source_angles = (a + 360.0) % 360.0
     order = np.argsort(source_angles)
     source_angles_sorted = source_angles[order]
-    source_values_sorted = values_db[order]
-    final_values = np.interp(target_angles, source_angles_sorted, source_values_sorted, period=360)
+    source_values_sorted = v[order]
+    final_values = np.interp(target_angles, source_angles_sorted, source_values_sorted, period=360.0)
+    final_values = np.clip(final_values, 0.0, 1.0)
 
-    lines = [f"'{description}',{gain:.2f},{num_antennas}\n"]
+    desc = str(description).replace("'", " ")
+    lines = [f"'{desc}', {gain:.2f}, {int(num_antennas)}\n"]
     for ang, val in zip(target_angles, final_values):
-        lines.append(f"{int(ang)},{val:.2f}\n")
+        lines.append(f"{int(round(float(ang)))}, {float(val):.4f}\n")
+    atomic_write_text(path, "".join(lines))
+
+
+def write_pat_conventional_combined(
+    path: str,
+    description: str,
+    gain: float,
+    num_antennas: int,
+    h_angles: np.ndarray,
+    h_values: np.ndarray,
+    v_angles: np.ndarray,
+    v_values: np.ndarray,
+    vertical_bearing_deg: int = 269,
+) -> None:
+    """Escreve PAT convencional no estilo EDX222 (HRP + bloco VRP)."""
+    h_ang = np.asarray(h_angles, dtype=float)
+    h_val = np.asarray(h_values, dtype=float)
+    v_ang = np.asarray(v_angles, dtype=float)
+    v_val = np.asarray(v_values, dtype=float)
+
+    # HRP: 0..359 deg (linear, normalizado)
+    h_src_ang = (h_ang + 360.0) % 360.0
+    h_src_val = np.maximum(np.nan_to_num(h_val, nan=0.0, posinf=0.0, neginf=0.0), 0.0)
+    h_order = np.argsort(h_src_ang)
+    h_src_ang = h_src_ang[h_order]
+    h_src_val = h_src_val[h_order]
+    h_out_ang = np.arange(0.0, 360.0, 1.0)
+    h_out_val = np.interp(h_out_ang, h_src_ang, h_src_val, period=360.0)
+    h_max = float(np.max(h_out_val)) if h_out_val.size else 0.0
+    if h_max > 0.0:
+        h_out_val = h_out_val / h_max
+    h_out_val = np.clip(h_out_val, 0.0, 1.0)
+
+    # VRP: 0, -1, -2, ... -90 deg (linear, normalizado)
+    v_res_ang, v_res_val = _resample_vertical_adt(v_ang, v_val)
+    v_res_val = np.maximum(np.nan_to_num(v_res_val, nan=0.0, posinf=0.0, neginf=0.0), 0.0)
+    v_out_ang = np.arange(0.0, -90.0 - 1e-9, -1.0)
+    v_out_val = np.interp(v_out_ang, v_res_ang, v_res_val)
+    v_max = float(np.max(v_out_val)) if v_out_val.size else 0.0
+    if v_max > 0.0:
+        v_out_val = v_out_val / v_max
+    v_out_val = np.clip(v_out_val, 0.0, 1.0)
+
+    desc = str(description).replace("'", " ")
+    lines = [f"'{desc}', {gain:.2f}, {int(num_antennas)}\n"]
+    for a_out, v_out in zip(h_out_ang, h_out_val):
+        lines.append(f"{int(a_out)}, {float(v_out):.4f}\n")
+    lines.append("999\n")
+    lines.append(f"1, {len(v_out_ang)}\n")
+    lines.append(f"{int(vertical_bearing_deg)},\n")
+    for a_out, v_out in zip(v_out_ang, v_out_val):
+        lines.append(f"{float(a_out):.1f}, {float(v_out):.4f}\n")
     atomic_write_text(path, "".join(lines))
 
 
@@ -1228,8 +1458,9 @@ class DatabaseManager:
     APP_DIR = APP_USER_DIR
     if not os.path.exists(APP_DIR):
         os.makedirs(APP_DIR, exist_ok=True)
-        
+
     DB_NAME = os.path.join(APP_DIR, "library.db")
+    AEDT_DIR = os.path.join(APP_DIR, "aedt_live")
 
     @classmethod
     def init_db(cls):
@@ -1263,6 +1494,15 @@ class DatabaseManager:
                       meta TEXT,
                       thumbnail_path TEXT,
                       added_at TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS aedt_3d_datasets
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      name TEXT,
+                      npz_path TEXT,
+                      file_hash TEXT,
+                      theta_points INTEGER,
+                      phi_points INTEGER,
+                      meta TEXT,
+                      added_at TIMESTAMP)''')
         conn.commit()
         conn.close()
 
@@ -1283,6 +1523,150 @@ class DatabaseManager:
         conn.commit()
         conn.close()
         return id_
+
+    @classmethod
+    def _sha256_file(cls, path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+
+    @classmethod
+    def _atomic_save_npz(cls, path: str, **kwargs) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp.npz"
+        np.savez_compressed(tmp, **kwargs)
+        os.replace(tmp, path)
+
+    @classmethod
+    def _insert_aedt_3d_row(cls, name: str, npz_path: str, meta: dict, theta_points: int, phi_points: int) -> int:
+        conn = sqlite3.connect(cls.DB_NAME)
+        c = conn.cursor()
+        file_hash = cls._sha256_file(npz_path) if os.path.exists(npz_path) else ""
+        c.execute(
+            """
+            INSERT INTO aedt_3d_datasets
+                (name, npz_path, file_hash, theta_points, phi_points, meta, added_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                npz_path,
+                file_hash,
+                int(theta_points),
+                int(phi_points),
+                json.dumps(meta or {}, ensure_ascii=False),
+                datetime.datetime.now(),
+            ),
+        )
+        rid = int(c.lastrowid)
+        conn.commit()
+        conn.close()
+        return rid
+
+    @classmethod
+    def add_diagram_entry(cls, payload: dict) -> int:
+        """
+        Saves AEDT Live payload into the existing library schema.
+        Returns the last inserted row id (2D preferred, then 3D row id).
+        """
+        cls.init_db()
+        if not isinstance(payload, dict):
+            raise ValueError("payload invalido para add_diagram_entry")
+
+        last_id = 0
+        base_meta = payload.get("meta", {})
+        cuts = payload.get("cuts_2d", {})
+        if not isinstance(cuts, dict):
+            cuts = {}
+
+        for key, ptype in (("HRP", "H"), ("VRP", "V")):
+            cut = cuts.get(key)
+            if not isinstance(cut, dict):
+                continue
+
+            angles = np.asarray(cut.get("angles_deg", cut.get("angles", [])), dtype=float)
+            if "mag_lin" in cut:
+                values = np.asarray(cut.get("mag_lin", []), dtype=float)
+            elif "values" in cut:
+                values = np.asarray(cut.get("values", []), dtype=float)
+            else:
+                mag_db = np.asarray(cut.get("mag_db", []), dtype=float)
+                values = np.power(10.0, mag_db / 20.0) if mag_db.size else np.asarray([], dtype=float)
+
+            if angles.size == 0 or values.size == 0 or angles.size != values.size:
+                continue
+            mask = np.isfinite(angles) & np.isfinite(values)
+            angles = angles[mask]
+            values = values[mask]
+            if angles.size < 2:
+                continue
+
+            values = np.clip(values, 0.0, None)
+            vmax = float(np.max(values)) if values.size else 0.0
+            if vmax > 0:
+                values = values / vmax
+
+            name = str(cut.get("name") or f"AEDT_{key}")
+            meta = {}
+            if isinstance(base_meta, dict):
+                meta.update(base_meta)
+            if isinstance(cut.get("meta"), dict):
+                meta.update(cut.get("meta"))
+            meta["Source"] = "AEDT Live"
+            meta["PatternKind"] = key
+
+            pattern = {
+                "name": name,
+                "type": ptype,
+                "angles": angles,
+                "values": values,
+                "meta": meta,
+            }
+            last_id = int(cls.add_diagram(pattern))
+
+        spherical = payload.get("spherical_3d")
+        if isinstance(spherical, dict):
+            npz_path = str(spherical.get("npz_path", "")).strip()
+            theta = np.asarray(spherical.get("theta_deg", []), dtype=float)
+            phi = np.asarray(spherical.get("phi_deg", []), dtype=float)
+            values_db = np.asarray(spherical.get("mag_db", spherical.get("values", [])), dtype=float)
+
+            if (not npz_path or not os.path.exists(npz_path)) and theta.size and phi.size and values_db.size:
+                os.makedirs(cls.AEDT_DIR, exist_ok=True)
+                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                name = str(spherical.get("name") or payload.get("meta", {}).get("design", "aedt_grid"))
+                safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "aedt_grid"
+                npz_path = os.path.join(cls.AEDT_DIR, f"{safe_name}_{stamp}.npz")
+                meta_3d = spherical.get("meta", {})
+                cls._atomic_save_npz(
+                    npz_path,
+                    theta_deg=theta,
+                    phi_deg=phi,
+                    values=values_db,
+                    meta=json.dumps(meta_3d or {}, ensure_ascii=False),
+                )
+
+            if npz_path and os.path.exists(npz_path):
+                meta_3d = spherical.get("meta", {})
+                if isinstance(base_meta, dict):
+                    merged_meta = dict(base_meta)
+                    if isinstance(meta_3d, dict):
+                        merged_meta.update(meta_3d)
+                else:
+                    merged_meta = meta_3d if isinstance(meta_3d, dict) else {}
+                merged_meta["Source"] = "AEDT Live"
+                grid_name = str(spherical.get("name") or "AEDT_3D")
+                theta_points = int(theta.size) if theta.size else int(spherical.get("theta_points", 0) or 0)
+                phi_points = int(phi.size) if phi.size else int(spherical.get("phi_points", 0) or 0)
+                last_id = int(cls._insert_aedt_3d_row(grid_name, npz_path, merged_meta, theta_points, phi_points))
+
+        if last_id <= 0:
+            raise ValueError("payload nao possui dados validos para insercao")
+        return last_id
 
     @classmethod
     def get_all_diagrams(cls) -> List[dict]:
@@ -1765,7 +2149,7 @@ class DiagramThumbnail(ctk.CTkFrame):
             self.ax.grid(True, alpha=0.3)
             
         self.fig.tight_layout()
-        self.canvas.draw()
+        self.canvas.draw_idle()
         
     def _calc_stats(self):
         ang = self.pattern['angles']
@@ -1794,7 +2178,7 @@ class DiagramThumbnail(ctk.CTkFrame):
 
 
 class DiagramsTab(ctk.CTkFrame):
-    def __init__(self, master, load_callback=None, task_hooks: Optional[dict] = None):
+    def __init__(self, master, load_callback=None, task_hooks: Optional[dict] = None, autoload: bool = True):
         super().__init__(master)
         self.load_callback = load_callback
         self.task_hooks = task_hooks or {}
@@ -1802,6 +2186,7 @@ class DiagramsTab(ctk.CTkFrame):
         self._import_cancel = threading.Event()
         self._import_future = None
         self._import_total = 0
+        self._loaded_once = False
         
         # Init DB
         DatabaseManager.init_db()
@@ -1863,6 +2248,12 @@ class DiagramsTab(ctk.CTkFrame):
         self.canvas.bind("<Leave>", self._unbind_mouse_scroll)
 
         # Auto Load
+        if autoload:
+            self.load_library()
+
+    def ensure_loaded(self):
+        if self._loaded_once:
+            return
         self.load_library()
 
     def _confirm_pattern_type(self, source_path: str, pattern: dict) -> Optional[str]:
@@ -2093,6 +2484,7 @@ class DiagramsTab(ctk.CTkFrame):
         
         for p in diagrams:
             self.add_thumbnail(p)
+        self._loaded_once = True
             
     def add_thumbnail(self, pattern):
         thumb = DiagramThumbnail(self.scroll, pattern, on_click=self.load_callback)
@@ -2143,6 +2535,8 @@ class PATConverterApp(ctk.CTk):
         self.v_angles = None; self.v_vals = None
         self.h_angles = None; self.h_vals = None
         self.export_registry: List[dict] = []
+        self.aedt_live_last_payload: Optional[dict] = None
+        self.aedt_live_3d: Optional[dict] = None
         
         # Estado da aba de estudo completo (suporte a polarizacao dupla)
         self.study_mode_var = tk.StringVar(value="simples")  # simples | duplo
@@ -2160,8 +2554,9 @@ class PATConverterApp(ctk.CTk):
         self.export_future = None
         self._wizard_lock = threading.Lock()
         self._wizard_progress = {"current": 0, "total": 1, "label": "Pronto"}
+        self.perf_tracer = PERF
 
-        # Tabview (6 abas)
+        # Tabview (abas principais)
         self.tabs = ctk.CTkTabview(self)
         self.tabs.pack(fill=ctk.BOTH, expand=True, padx=10, pady=10)
 
@@ -2170,6 +2565,7 @@ class PATConverterApp(ctk.CTk):
         self.tab_horz = self.tabs.add("Composicao Horizontal")
         self.tab_study = self.tabs.add("Estudo Completo")
         self.tab_proj = self.tabs.add("Dados do Projeto")
+        self.tab_adv = self.tabs.add("Visualizacao Avancada")
         self.tab_diag = self.tabs.add("Diagramas (Batch)")
 
         self._build_tab_file()
@@ -2177,6 +2573,8 @@ class PATConverterApp(ctk.CTk):
         self._build_tab_horizontal()
         self._build_tab_study()
         self._build_tab_project()
+        self.advanced_tab_view = AdvancedVisualizationTab(self.tab_adv, app=self)
+        self.advanced_tab_view.pack(fill="both", expand=True)
         
         # Build Diagram Tab with Callback
         self.task_cancel_event = threading.Event()
@@ -2189,8 +2587,22 @@ class PATConverterApp(ctk.CTk):
                 "finish": self._task_ui_finish,
                 "is_cancelled": self._task_ui_is_cancelled,
             },
+            autoload=False,
         )
         self.diagrams_view.pack(fill="both", expand=True)
+
+        # Optional plugin tab: AEDT Live (HFSS)
+        self.aedt_live_tab = None
+        if callable(register_aedt_live_tab):
+            try:
+                self.aedt_live_tab = register_aedt_live_tab(
+                    app=self,
+                    tabview=self.tabs,
+                    tab_name="AEDT Live",
+                    output_dir=getattr(self, "output_dir", None),
+                )
+            except Exception:
+                LOGGER.exception("Falha ao registrar aba AEDT Live.")
 
         # Status + progress
         self.status_bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -2277,6 +2689,7 @@ class PATConverterApp(ctk.CTk):
         m_tools.add_command(label="Null Fill Wizard...", accelerator="Ctrl+W", command=self.open_null_fill_wizard)
         m_tools.add_command(label="Export Wizard...", accelerator="Ctrl+Shift+E", command=self.open_export_wizard)
         m_tools.add_command(label="Validate PRN/PAT...", command=self.open_validator)
+        m_tools.add_command(label="Advanced Visualization", accelerator="Ctrl+Shift+V", command=self.open_advanced_view)
         menubar.add_cascade(label="Tools", menu=m_tools)
 
         m_window = tk.Menu(menubar, tearoff=0)
@@ -2284,7 +2697,9 @@ class PATConverterApp(ctk.CTk):
         m_window.add_command(label="Go to Composicao Vertical", accelerator="Alt+2", command=lambda: self.tabs.set("Composicao Vertical"))
         m_window.add_command(label="Go to Composicao Horizontal", accelerator="Alt+3", command=lambda: self.tabs.set("Composicao Horizontal"))
         m_window.add_command(label="Go to Estudo Completo", accelerator="Alt+4", command=lambda: self.tabs.set("Estudo Completo"))
-        m_window.add_command(label="Go to Diagramas", accelerator="Alt+5", command=lambda: self.tabs.set("Diagramas (Batch)"))
+        m_window.add_command(label="Go to Visualizacao Avancada", accelerator="Alt+5", command=lambda: self.tabs.set("Visualizacao Avancada"))
+        m_window.add_command(label="Go to Diagramas", accelerator="Alt+6", command=lambda: self.tabs.set("Diagramas (Batch)"))
+        m_window.add_command(label="Go to AEDT Live", accelerator="Alt+7", command=lambda: self._goto_tab("AEDT Live"))
         menubar.add_cascade(label="Window", menu=m_window)
 
         m_help = tk.Menu(menubar, tearoff=0)
@@ -2305,6 +2720,7 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Control-i>", lambda e: self.batch_import())
         self.bind_all("<Control-e>", lambda e: self.export_all_pat())
         self.bind_all("<Control-Shift-E>", lambda e: self.open_export_wizard())
+        self.bind_all("<Control-Shift-V>", lambda e: self.open_advanced_view())
         self.bind_all("<Control-p>", lambda e: self.export_all_prn())
         self.bind_all("<Control-l>", lambda e: self.open_log_window())
         self.bind_all("<Control-w>", lambda e: self.open_null_fill_wizard())
@@ -2316,7 +2732,17 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Alt-KeyPress-2>", lambda e: self.tabs.set("Composicao Vertical"))
         self.bind_all("<Alt-KeyPress-3>", lambda e: self.tabs.set("Composicao Horizontal"))
         self.bind_all("<Alt-KeyPress-4>", lambda e: self.tabs.set("Estudo Completo"))
-        self.bind_all("<Alt-KeyPress-5>", lambda e: self.tabs.set("Diagramas (Batch)"))
+        self.bind_all("<Alt-KeyPress-5>", lambda e: self.tabs.set("Visualizacao Avancada"))
+        self.bind_all("<Alt-KeyPress-6>", lambda e: self.tabs.set("Diagramas (Batch)"))
+        self.bind_all("<Alt-KeyPress-7>", lambda e: self._goto_tab("AEDT Live"))
+        self.bind_all("<Button-3>", self._global_context_menu, add="+")
+        self.bind_all("<Button-2>", self._global_context_menu, add="+")
+
+    def _goto_tab(self, name: str):
+        try:
+            self.tabs.set(name)
+        except Exception:
+            pass
 
     def _task_ui_start(self, label: str, total: int = 0):
         self.task_cancel_event.clear()
@@ -2342,6 +2768,44 @@ class PATConverterApp(ctk.CTk):
 
     def _task_ui_is_cancelled(self) -> bool:
         return self.task_cancel_event.is_set()
+
+    def _notify_advanced_data_changed(self):
+        view = getattr(self, "advanced_tab_view", None)
+        if view is None:
+            return
+        try:
+            view.refresh_sources()
+        except Exception:
+            LOGGER.exception("Falha ao atualizar dados da aba de visualizacao avancada.")
+
+    def open_advanced_view(self):
+        try:
+            self.tabs.set("Visualizacao Avancada")
+            self._notify_advanced_data_changed()
+            self._set_status("Visualizacao avancada aberta.")
+        except Exception:
+            LOGGER.exception("Falha ao abrir visualizacao avancada.")
+
+    def _global_context_menu(self, event):
+        try:
+            widget = getattr(event, "widget", None)
+            if widget is None:
+                return
+            wclass = str(widget.winfo_class())
+            # Menus locais de plot/tabela devem prevalecer.
+            if wclass in {"Canvas", "Treeview", "Entry", "TEntry", "Text", "Listbox", "Button", "TButton"}:
+                return
+            m = tk.Menu(self, tearoff=0)
+            m.add_command(label="Visualizacao Avancada", command=self.open_advanced_view)
+            m.add_command(label="Ajuda / Workflow", command=self.show_help)
+            m.add_command(label="Abrir Log", command=self.open_log_window)
+            m.add_command(label="Preferencias", command=self.open_preferences)
+            x = int(getattr(event, "x_root", self.winfo_pointerx()))
+            y = int(getattr(event, "y_root", self.winfo_pointery()))
+            m.tk_popup(x, y)
+            m.grab_release()
+        except Exception:
+            pass
 
     def project_new(self):
         if not messagebox.askyesno("Novo projeto", "Limpar estado atual e iniciar novo projeto?"):
@@ -2402,6 +2866,10 @@ class PATConverterApp(ctk.CTk):
 
     def batch_import(self):
         self.tabs.set("Diagramas (Batch)")
+        try:
+            self.diagrams_view.ensure_loaded()
+        except Exception:
+            LOGGER.exception("Falha ao carregar biblioteca para importacao em lote.")
         self.diagrams_view.add_files()
 
     def view_reset(self):
@@ -3105,6 +3573,91 @@ class PATConverterApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Erro ao carregar", str(e))
 
+    def _payload_series_to_linear(self, cut: dict) -> Tuple[np.ndarray, np.ndarray]:
+        angles = np.asarray(cut.get("angles_deg", cut.get("angles", [])), dtype=float)
+        if "mag_lin" in cut:
+            values = np.asarray(cut.get("mag_lin", []), dtype=float)
+        elif "values" in cut:
+            values = np.asarray(cut.get("values", []), dtype=float)
+            if values.size and np.nanmax(values) <= 0.0 and np.nanmin(values) < -1.0:
+                values = np.power(10.0, values / 20.0)
+        else:
+            mag_db = np.asarray(cut.get("mag_db", []), dtype=float)
+            values = np.power(10.0, mag_db / 20.0) if mag_db.size else np.asarray([], dtype=float)
+
+        if angles.size == 0 or values.size == 0 or angles.size != values.size:
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        mask = np.isfinite(angles) & np.isfinite(values)
+        angles = angles[mask]
+        values = values[mask]
+        if angles.size < 2:
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        values = np.clip(values, 0.0, None)
+        vmax = float(np.max(values)) if values.size else 0.0
+        if vmax > 0:
+            values = values / vmax
+        order = np.argsort(angles)
+        return angles[order], values[order]
+
+    def import_pattern_into_project(self, payload: dict) -> None:
+        """
+        Bridge utilizado pela aba AEDT Live para injetar cortes/3D no workspace atual.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("Payload invalido para importacao no projeto.")
+
+        cuts = payload.get("cuts_2d", {})
+        if not isinstance(cuts, dict):
+            cuts = {}
+        loaded_any = False
+
+        hrp = cuts.get("HRP")
+        if isinstance(hrp, dict):
+            h_ang, h_val = self._payload_series_to_linear(hrp)
+            if h_ang.size and h_val.size:
+                self.h_plot_mode.set("Polar")
+                self.h_angles = h_ang
+                self.h_vals = h_val
+                self._plot_horizontal_file(h_ang, h_val)
+                loaded_any = True
+
+        vrp = cuts.get("VRP")
+        if isinstance(vrp, dict):
+            v_ang, v_val = self._payload_series_to_linear(vrp)
+            if v_ang.size and v_val.size:
+                self.v_plot_mode.set("Planar")
+                self.v_angles = v_ang
+                self.v_vals = v_val
+                self._plot_vertical_file(v_ang, v_val)
+                loaded_any = True
+
+        spherical = payload.get("spherical_3d")
+        if isinstance(spherical, dict):
+            self.aedt_live_3d = spherical
+
+        self.aedt_live_last_payload = payload
+        self._notify_advanced_data_changed()
+        self._refresh_project_overview()
+
+        if loaded_any:
+            self.tabs.set("Arquivo")
+            self._set_status("Dados AEDT Live importados para o projeto.")
+        else:
+            self._set_status("Payload AEDT recebido sem cortes 2D validos.")
+
+    def add_diagram_entry(self, payload: dict) -> int:
+        """
+        Bridge para salvar payload AEDT Live na biblioteca SQLite.
+        """
+        row_id = int(DatabaseManager.add_diagram_entry(payload))
+        if hasattr(self, "diagrams_view"):
+            try:
+                self.diagrams_view.load_library()
+            except Exception:
+                LOGGER.exception("Falha ao atualizar aba Diagramas apos importacao AEDT.")
+        self._set_status(f"Payload AEDT salvo na biblioteca (registro {row_id}).")
+        return row_id
+
     def _study_slot_kind(self, slot: str) -> str:
         return "H" if slot.upper().startswith("H") else "V"
 
@@ -3300,7 +3853,8 @@ class PATConverterApp(ctk.CTk):
             widget["src_label"].configure(text=f"Fonte: {os.path.basename(src) if src != '-' else '-'}")
 
         widget["ax"] = ax
-        widget["canvas"].draw()
+        widget["canvas"].draw_idle()
+        self._notify_advanced_data_changed()
 
     def _refresh_study_mode(self, *_):
         dual = self.study_mode_var.get().lower() == "duplo"
@@ -3559,6 +4113,10 @@ class PATConverterApp(ctk.CTk):
         exports_total = len(self.export_registry)
         exports_ok = sum(1 for x in self.export_registry if os.path.exists(x.get("path", "")))
         exports_missing = exports_total - exports_ok
+        aedt_payload = getattr(self, "aedt_live_last_payload", None)
+        aedt_grid = getattr(self, "aedt_live_3d", None)
+        aedt_has_2d = "sim" if isinstance(aedt_payload, dict) and isinstance(aedt_payload.get("cuts_2d"), dict) and bool(aedt_payload.get("cuts_2d")) else "nao"
+        aedt_has_3d = "sim" if isinstance(aedt_grid, dict) else "nao"
 
         lines = [
             "=== DADOS DO PROJETO ===",
@@ -3567,6 +4125,8 @@ class PATConverterApp(ctk.CTk):
             f"Autor: {var_value('author_var')}",
             f"Normalizacao: {var_value('norm_mode_var')}",
             f"Pasta de saida: {self.output_dir or '(nao definida)'}",
+            f"AEDT 2D no projeto: {aedt_has_2d}",
+            f"AEDT 3D no projeto: {aedt_has_3d}",
             "",
             "Entradas (Aba Arquivo):",
             f"VRP: {size_info('v_angles')}",
@@ -3652,6 +4212,8 @@ class PATConverterApp(ctk.CTk):
             "arrays": arrays,
             "study_sources": dict(self.study_sources),
             "export_registry": list(self.export_registry),
+            "aedt_live_last_payload": self.aedt_live_last_payload if isinstance(self.aedt_live_last_payload, dict) else None,
+            "aedt_live_3d": self.aedt_live_3d if isinstance(self.aedt_live_3d, dict) else None,
         }
 
     def _apply_project_state(self, state: dict):
@@ -3712,6 +4274,11 @@ class PATConverterApp(ctk.CTk):
                         "path": item.get("path", ""),
                     })
 
+        aedt_payload = state.get("aedt_live_last_payload")
+        self.aedt_live_last_payload = aedt_payload if isinstance(aedt_payload, dict) else None
+        aedt_grid = state.get("aedt_live_3d")
+        self.aedt_live_3d = aedt_grid if isinstance(aedt_grid, dict) else None
+
         if self.v_angles is not None and self.v_vals is not None:
             self._plot_vertical_file(self.v_angles, self.v_vals)
         if self.h_angles is not None and self.h_vals is not None:
@@ -3724,6 +4291,7 @@ class PATConverterApp(ctk.CTk):
             self._plot_study_slot(slot)
         self._refresh_study_mode()
 
+        self._notify_advanced_data_changed()
         self._refresh_project_overview()
 
     def save_work_in_progress(self):
@@ -4107,6 +4675,7 @@ class PATConverterApp(ctk.CTk):
         # Botões de Exportação Global no Topo (para fácil acesso)
         ctk.CTkButton(top, text="Export .PAT (All)", command=self.export_all_pat, fg_color="#22aa66", width=110).pack(side=ctk.RIGHT, padx=5)
         ctk.CTkButton(top, text="Export .PRN (All)", command=self.export_all_prn, fg_color="#aa6622", width=110).pack(side=ctk.RIGHT, padx=5)
+        ctk.CTkButton(top, text="Advanced View", command=self.open_advanced_view, fg_color="#355f9a", width=110).pack(side=ctk.RIGHT, padx=5)
 
 
         # 2. Main Content Area (Plots + Loaders) - Middle
@@ -4328,9 +4897,87 @@ class PATConverterApp(ctk.CTk):
                 m.add_command(label="Export Plot PNG (HRP)", command=lambda: self.export_plot_img("H"))
             else:
                 m.add_command(label="Export Plot PNG (VRP)", command=lambda: self.export_plot_img("V"))
+            m.add_command(label="Send to Study POL1", command=lambda: self._send_file_plot_to_study(interactor.kind))
             widget = interactor.canvas.get_tk_widget()
-            x = widget.winfo_pointerx()
-            y = widget.winfo_pointery()
+            x, y = self._menu_popup_coords_from_mpl_event(event, widget)
+            m.tk_popup(x, y)
+        finally:
+            try:
+                if m is not None:
+                    m.grab_release()
+            except Exception:
+                pass
+
+    def _menu_popup_coords_from_mpl_event(self, event, widget):
+        ge = getattr(event, "guiEvent", None)
+        gx = getattr(ge, "x", None)
+        gy = getattr(ge, "y", None)
+        if gx is not None and gy is not None:
+            try:
+                return widget.winfo_rootx() + int(gx), widget.winfo_rooty() + int(gy)
+            except Exception:
+                pass
+        return widget.winfo_pointerx(), widget.winfo_pointery()
+
+    def _export_figure_png(self, figure: Figure, default_name: str):
+        path = filedialog.asksaveasfilename(
+            title="Exportar grafico PNG",
+            defaultextension=".png",
+            initialfile=default_name,
+            filetypes=[("PNG", "*.png"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        figure.savefig(path, dpi=300)
+        self._register_export(path, "PLOT_IMG")
+        self._set_status(f"Grafico exportado: {path}")
+
+    def _send_file_plot_to_study(self, kind: str):
+        k = str(kind).upper()
+        if k == "H":
+            if self.h_angles is None or self.h_vals is None:
+                return
+            self._set_study_slot_data("H1", self.h_angles.copy(), self.h_vals.copy(), source="Aba Arquivo (HRP)")
+            self._set_status("HRP enviado para Estudo Completo H1.")
+        else:
+            if self.v_angles is None or self.v_vals is None:
+                return
+            self._set_study_slot_data("V1", self.v_angles.copy(), self.v_vals.copy(), source="Aba Arquivo (VRP)")
+            self._set_status("VRP enviado para Estudo Completo V1.")
+
+    def _show_vertical_comp_context_menu(self, event):
+        if event.button not in (2, 3):
+            return
+        m = None
+        try:
+            m = tk.Menu(self, tearoff=0)
+            m.add_command(label="Export current cut PNG", command=lambda: self._export_figure_png(self.fig_v2, "vertical_composto.png"))
+            m.add_command(label="Export PAT", command=self.export_vertical_array_pat)
+            m.add_command(label="Export PRN", command=self.export_vertical_array_prn)
+            m.add_command(label="Send to Study V1", command=lambda: self._use_composition_tab_for_study_slot("V1"))
+            widget = self.canvas_v2.get_tk_widget()
+            x, y = self._menu_popup_coords_from_mpl_event(event, widget)
+            m.tk_popup(x, y)
+        finally:
+            try:
+                if m is not None:
+                    m.grab_release()
+            except Exception:
+                pass
+
+    def _show_horizontal_comp_context_menu(self, event):
+        if event.button not in (2, 3):
+            return
+        m = None
+        try:
+            m = tk.Menu(self, tearoff=0)
+            m.add_command(label="Export current cut PNG", command=lambda: self._export_figure_png(self.fig_h2, "horizontal_composto.png"))
+            m.add_command(label="Export PAT", command=self.export_horizontal_array_pat)
+            m.add_command(label="Export PAT RFS", command=self.export_horizontal_array_rfs)
+            m.add_command(label="Export PRN", command=self.export_horizontal_array_prn)
+            m.add_command(label="Send to Study H1", command=lambda: self._use_composition_tab_for_study_slot("H1"))
+            widget = self.canvas_h2.get_tk_widget()
+            x, y = self._menu_popup_coords_from_mpl_event(event, widget)
             m.tk_popup(x, y)
         finally:
             try:
@@ -4357,6 +5004,7 @@ class PATConverterApp(ctk.CTk):
             on_measure_update=self._on_plot_measure_update,
             on_status=self._set_status,
             on_context_menu=self._show_plot_context_menu,
+            tracer=PERF,
         )
         self.h_file_interactor = PlotInteractor(
             ax=self.ax_h1,
@@ -4367,6 +5015,7 @@ class PATConverterApp(ctk.CTk):
             on_measure_update=self._on_plot_measure_update,
             on_status=self._set_status,
             on_context_menu=self._show_plot_context_menu,
+            tracer=PERF,
         )
 
     def choose_output_dir(self):
@@ -4524,6 +5173,7 @@ class PATConverterApp(ctk.CTk):
         self.ax_v1 = ax
         self.canvas_v1.draw_idle()
         self._attach_file_plot_interactors()
+        self._notify_advanced_data_changed()
 
     def load_horizontal(self):
         path = filedialog.askopenfilename(title="Selecione HRP (CSV/TXT)",
@@ -4559,6 +5209,7 @@ class PATConverterApp(ctk.CTk):
         self.ax_h1 = ax
         self.canvas_h1.draw_idle()
         self._attach_file_plot_interactors()
+        self._notify_advanced_data_changed()
 
     def load_prn(self):
         path = filedialog.askopenfilename(title="Selecione arquivo PRN",
@@ -4598,6 +5249,7 @@ class PATConverterApp(ctk.CTk):
         self.canvas_h1.draw_idle()
         self._clear_file_markers()
         self._attach_file_plot_interactors()
+        self._notify_advanced_data_changed()
         self._set_status("Limpo.")
 
     def export_all_pat(self):
@@ -4606,6 +5258,28 @@ class PATConverterApp(ctk.CTk):
         author = self.author_var.get().strip() or "gecesar"
         norm = self.norm_mode_var.get()
         out_dir = self.output_dir or os.getcwd()
+
+        has_v = self.v_angles is not None and self.v_vals is not None
+        has_h = self.h_angles is not None and self.h_vals is not None
+        if has_v and has_h:
+            try:
+                ang_v, val_v = resample_vertical(self.v_angles, self.v_vals, norm=norm)
+                ang_h, val_h = resample_horizontal(self.h_angles, self.h_vals, norm=norm)
+                path_combined = os.path.join(out_dir, f"{base}.pat")
+                write_pat_conventional_combined(
+                    path_combined,
+                    f"{base}",
+                    0.0,
+                    1,
+                    ang_h,
+                    val_h,
+                    ang_v,
+                    val_v,
+                )
+                self._register_export(path_combined, "ALL_CONVENTIONAL_PAT")
+                self._set_status(f"PAT convencional (HRP+VRP) exportado: {path_combined}")
+            except Exception as e:
+                messagebox.showwarning("Aviso", f"Falha ao exportar PAT convencional combinado: {e}")
 
         if self.v_angles is not None:
             ang_v, val_v = resample_vertical(self.v_angles, self.v_vals, norm=norm)
@@ -4822,6 +5496,7 @@ class PATConverterApp(ctk.CTk):
         self.ax_v2.grid(True, alpha=0.3)
         self.canvas_v2 = FigureCanvasTkAgg(self.fig_v2, master=graph_card)
         self.canvas_v2.get_tk_widget().pack(fill=ctk.BOTH, expand=True, padx=8, pady=8)
+        self.canvas_v2.mpl_connect("button_press_event", self._show_vertical_comp_context_menu)
 
         info_card = ctk.CTkFrame(right_grid)
         info_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
@@ -5114,7 +5789,8 @@ class PATConverterApp(ctk.CTk):
         self.ax_v2.set_ylim([0, 1.1])
         if values_initial is not None or null_regions:
             self.ax_v2.legend(loc="upper right", fontsize=8)
-        self.canvas_v2.draw()
+        self.canvas_v2.draw_idle()
+        self._notify_advanced_data_changed()
 
     def _export_vertical_harness_to_dir(self, out_dir: str, base: str) -> List[Tuple[str, str]]:
         if self.vert_synth_result is None or self.vert_harness is None:
@@ -5417,6 +6093,7 @@ class PATConverterApp(ctk.CTk):
         self.ax_h2.grid(True, alpha=0.3)
         self.canvas_h2 = FigureCanvasTkAgg(self.fig_h2, master=plot_frame)
         self.canvas_h2.get_tk_widget().pack(fill=ctk.BOTH, expand=True, padx=8, pady=8)
+        self.canvas_h2.mpl_connect("button_press_event", self._show_horizontal_comp_context_menu)
 
         # buffers
         self.horz_angles = None
@@ -5531,7 +6208,8 @@ class PATConverterApp(ctk.CTk):
         self.ax_h2.plot(theta_plot, values, linewidth=1.5, color='red')
         self.ax_h2.set_theta_zero_location('N')
         self.ax_h2.set_theta_direction(-1)
-        self.canvas_h2.draw()
+        self.canvas_h2.draw_idle()
+        self._notify_advanced_data_changed()
 
     def export_horizontal_array_pat(self):
         if self.horz_angles is None or self.horz_values is None:
@@ -5632,7 +6310,22 @@ class PATConverterApp(ctk.CTk):
             self._refresh_project_overview()
 
 if __name__ == "__main__":
-    app = PATConverterApp()
-    app.mainloop()
+    try:
+        app = PATConverterApp()
+        LOGGER.info("Aplicacao iniciada com sucesso.")
+        app.mainloop()
+    except Exception as e:
+        LOGGER.exception("Falha fatal ao iniciar a aplicacao.")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(
+                "Erro de inicializacao",
+                f"Nao foi possivel iniciar a aplicacao.\n\n{e}\n\nVerifique o log em:\n{LOG_FILE}",
+            )
+            root.destroy()
+        except Exception:
+            pass
+        raise
 
 
