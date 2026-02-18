@@ -1,0 +1,6 @@
+D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_visual/CMakeFiles/eftx_core.dir
+D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_visual/CMakeFiles/eftx_pattern_tool_cpp.dir
+D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_visual/CMakeFiles/PACKAGE.dir
+D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_visual/CMakeFiles/INSTALL.dir
+D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_visual/CMakeFiles/ALL_BUILD.dir
+D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_visual/CMakeFiles/ZERO_CHECK.dir

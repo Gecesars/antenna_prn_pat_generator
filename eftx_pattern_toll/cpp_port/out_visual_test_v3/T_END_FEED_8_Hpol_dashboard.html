@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>T_END_FEED_8_Hpol - Dashboard</title>
+<style>
+:root{--bg:#ecf3fa;--surface:#ffffff;--text:#0f172a;--muted:#4b5f76;--line:#d3e1ef;--ink:#10253c;--accent:#0d9488;--accent-deep:#1d4f80;--chip:#e8f2fc;--chip-text:#17466f;}
+*{box-sizing:border-box}html,body{margin:0;padding:0}
+body{font-family:'Bahnschrift','Trebuchet MS','Segoe UI',Arial,sans-serif;background:radial-gradient(circle at 10% 10%,#f8fbff 0,#ecf3fa 55%,#e9f1f9 100%);color:var(--text)}
+.wrap{max-width:1520px;margin:0 auto;padding:22px 22px 30px}
+.hero{position:relative;overflow:hidden;background:linear-gradient(135deg,#11233a,#1b4268);color:#fff;border-radius:18px;padding:26px 28px 24px;box-shadow:0 20px 45px rgba(15,30,52,.22)}
+.hero:after{content:'';position:absolute;right:-80px;top:-60px;width:260px;height:260px;border-radius:50%;background:rgba(13,148,136,.20)}
+.hero h1{margin:0;font-size:31px;letter-spacing:.2px}.hero p{margin:8px 0 0;color:#d6e4f3;font-size:14px}
+.hero-kpi{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.hero-kpi .k{padding:7px 11px;border-radius:999px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);font-size:12px}
+.layout{display:grid;grid-template-columns:280px 1fr;gap:16px;margin-top:16px}
+.side{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;position:sticky;top:14px;height:fit-content;box-shadow:0 10px 24px rgba(15,23,42,.07)}
+.side h2{margin:0 0 10px;font-size:15px;color:var(--ink)}.side ul{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+.side a{display:block;padding:8px 10px;border-radius:9px;text-decoration:none;color:#16436a;background:#f5f9fe;border:1px solid #dbe8f6;font-size:12px}
+.side a:hover{background:#e8f2fc}
+.main{display:grid;gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 24px rgba(15,23,42,.06);overflow:hidden}
+.card-h{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card-h h3{margin:0;font-size:17px;color:var(--ink)}.tag{font-size:11px;font-weight:700;letter-spacing:.4px;padding:4px 9px;border-radius:999px;background:var(--chip);color:var(--chip-text);border:1px solid #cfe0f2}
+.card-b{padding:14px 16px}
+.metrics{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:8px;margin-bottom:12px}
+.m{border:1px solid var(--line);border-radius:10px;padding:9px;background:#fafdff}.m .k{font-size:11px;color:var(--muted)}.m .v{margin-top:4px;font-size:14px;font-weight:700;color:#13263f}
+.plot{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:10px;background:#fff}
+.links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.links a{font-size:12px;text-decoration:none;color:#0f3f6d;background:var(--chip);border:1px solid #cfe0f2;padding:5px 9px;border-radius:999px}
+.foot{margin-top:2px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.foot h3{margin:0 0 10px 0;font-size:15px}.foot ul{margin:0;padding-left:18px;color:#334155}
+@media(max-width:1260px){.layout{grid-template-columns:1fr}.side{position:static}.metrics{grid-template-columns:repeat(3,minmax(110px,1fr));}}
+@media(max-width:760px){.metrics{grid-template-columns:repeat(2,minmax(110px,1fr));}.hero h1{font-size:26px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<section class="hero"><h1>T_END_FEED_8_Hpol</h1><p>Painel tecnico consolidado de diagramas, metricas e artefatos gerados automaticamente.</p><div class="hero-kpi"><span class="k">Cortes: 2</span><span class="k">Azimute: 1</span><span class="k">Elevacao: 1</span><span class="k">Artefatos extras: 1</span></div></section>
+<section class="layout">
+<aside class="side"><h2>Navegacao rapida</h2><ul><li><a href="#t-end-feed-8-hpol---pol1---azimute-1">T_END_FEED_8_Hpol | POL1 | Azimute</a></li><li><a href="#t-end-feed-8-hpol---pol1---elevacao-2">T_END_FEED_8_Hpol | POL1 | Elevacao</a></li></ul></aside>
+<div class="main">
+<article id="t-end-feed-8-hpol---pol1---azimute-1" class="card">
+<div class="card-h"><h3>T_END_FEED_8_Hpol | POL1 | Azimute</h3><span class="tag">AZIMUTE POLAR</span></div>
+<div class="card-b">
+<div class="metrics">
+<div class="m"><div class="k">Peak (lin)</div><div class="v">1.0000</div></div>
+<div class="m"><div class="k">Peak (dB)</div><div class="v">0.00</div></div>
+<div class="m"><div class="k">HPBW (deg)</div><div class="v">28.71</div></div>
+<div class="m"><div class="k">D2D (lin)</div><div class="v">2.975</div></div>
+<div class="m"><div class="k">D2D (dB)</div><div class="v">4.73</div></div>
+<div class="m"><div class="k">Min (dB)</div><div class="v">-28.58</div></div>
+</div>
+<img class="plot" src="T_END_FEED_8_Hpol_AZ_POL1_DIAGRAMA.svg" alt="T_END_FEED_8_Hpol | POL1 | Azimute"/>
+<div class="links"><a href="T_END_FEED_8_Hpol_AZ_POL1_TABELA.csv">Tabela CSV</a><a href="T_END_FEED_8_Hpol_AZ_POL1.pat">PAT</a><a href="T_END_FEED_8_Hpol_AZ_POL1_ADT.pat">PAT ADT</a></div>
+</div>
+</article>
+<article id="t-end-feed-8-hpol---pol1---elevacao-2" class="card">
+<div class="card-h"><h3>T_END_FEED_8_Hpol | POL1 | Elevacao</h3><span class="tag">ELEVACAO PLANAR</span></div>
+<div class="card-b">
+<div class="metrics">
+<div class="m"><div class="k">Peak (lin)</div><div class="v">1.0000</div></div>
+<div class="m"><div class="k">Peak (dB)</div><div class="v">0.00</div></div>
+<div class="m"><div class="k">HPBW (deg)</div><div class="v">16.21</div></div>
+<div class="m"><div class="k">D2D (lin)</div><div class="v">8.834</div></div>
+<div class="m"><div class="k">D2D (dB)</div><div class="v">9.46</div></div>
+<div class="m"><div class="k">Min (dB)</div><div class="v">-26.29</div></div>
+</div>
+<img class="plot" src="T_END_FEED_8_Hpol_EL_POL1_DIAGRAMA.svg" alt="T_END_FEED_8_Hpol | POL1 | Elevacao"/>
+<div class="links"><a href="T_END_FEED_8_Hpol_EL_POL1_TABELA.csv">Tabela CSV</a><a href="T_END_FEED_8_Hpol_EL_POL1.pat">PAT</a><a href="T_END_FEED_8_Hpol_EL_POL1_ADT.pat">PAT ADT</a></div>
+</div>
+</article>
+<section class="foot"><h3>Artefatos adicionais</h3><ul><li><a href="T_END_FEED_8_Hpol_POL1.prn">T_END_FEED_8_Hpol_POL1.prn</a></li></ul></section>
+</div></section>
+</div>
+</body>
+</html>

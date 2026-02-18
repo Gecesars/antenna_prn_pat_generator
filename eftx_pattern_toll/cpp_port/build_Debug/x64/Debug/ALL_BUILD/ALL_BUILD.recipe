@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\cpp_port\build_Debug\x64\Debug\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\cpp_port\build_Debug\Debug\eftx_pattern_tool_cpp.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\cpp_port\build_Debug\x64\Debug\ALL_BUILD</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

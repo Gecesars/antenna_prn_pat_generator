@@ -1,0 +1,54 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "D:\\dev\\Conversor_hfss_pat_RFS\\eftx_pattern_toll\\visual_studio\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{D25F1C32-F5F8-4B65-9465-CBD72C422553}|EFTX.PatternStudio\\EFTX.PatternStudio.csproj|d:\\dev\\conversor_hfss_pat_rfs\\eftx_pattern_toll\\visual_studio\\eftx.patternstudio\\form1.designer.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{D25F1C32-F5F8-4B65-9465-CBD72C422553}|EFTX.PatternStudio\\EFTX.PatternStudio.csproj|solutionrelative:eftx.patternstudio\\form1.designer.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{D25F1C32-F5F8-4B65-9465-CBD72C422553}|EFTX.PatternStudio\\EFTX.PatternStudio.csproj|d:\\dev\\conversor_hfss_pat_rfs\\eftx_pattern_toll\\visual_studio\\eftx.patternstudio\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{D25F1C32-F5F8-4B65-9465-CBD72C422553}|EFTX.PatternStudio\\EFTX.PatternStudio.csproj|solutionrelative:eftx.patternstudio\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Form1.Designer.cs",
+              "DocumentMoniker": "D:\\dev\\Conversor_hfss_pat_RFS\\eftx_pattern_toll\\visual_studio\\EFTX.PatternStudio\\Form1.Designer.cs",
+              "RelativeDocumentMoniker": "EFTX.PatternStudio\\Form1.Designer.cs",
+              "ToolTip": "D:\\dev\\Conversor_hfss_pat_RFS\\eftx_pattern_toll\\visual_studio\\EFTX.PatternStudio\\Form1.Designer.cs",
+              "RelativeToolTip": "EFTX.PatternStudio\\Form1.Designer.cs",
+              "ViewState": "AQIAADcCAAAAAAAAAAAQwBIAAAAJAAAA",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-02-18T07:09:31.746Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "Program.cs",
+              "DocumentMoniker": "D:\\dev\\Conversor_hfss_pat_RFS\\eftx_pattern_toll\\visual_studio\\EFTX.PatternStudio\\Program.cs",
+              "RelativeDocumentMoniker": "EFTX.PatternStudio\\Program.cs",
+              "ToolTip": "D:\\dev\\Conversor_hfss_pat_RFS\\eftx_pattern_toll\\visual_studio\\EFTX.PatternStudio\\Program.cs",
+              "RelativeToolTip": "EFTX.PatternStudio\\Program.cs",
+              "ViewState": "AQIAAAAAAAAAAAAAAAAAAA8AAAABAAAA",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-02-18T07:08:46.051Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

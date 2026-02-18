@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+    Name="EFTX Diagram Suite"
+    Manufacturer="EFTX"
+    Version="1.4.0"
+    UpgradeCode="{952E3852-5953-4393-9467-336714151614}"
+    InstallerVersion="500"
+    Compressed="yes"
+    Scope="perMachine">
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <MajorUpgrade DowngradeErrorMessage="Uma versao mais recente ja esta instalada." />
+
+    <Icon Id="AppIcon" SourceFile="icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="INSTALLLEVEL" Value="100" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLROOT" Name="EFTX">
+        <Directory Id="INSTALLFOLDER" Name="DiagramSuite" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppProgramMenuFolder" Name="EFTX Diagram Suite" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="CmpShortcutStartMenu" Guid="*">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Directory="AppProgramMenuFolder"
+          Name="EFTX Diagram Suite"
+          Description="Abrir EFTX Diagram Suite"
+          Target="[INSTALLFOLDER]EFTX_DiagramSuite.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppProgramMenuFolder" Directory="AppProgramMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\EFTX\DiagramSuite" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="CmpShortcutDesktop" Guid="*">
+        <Shortcut
+          Id="DesktopShortcut"
+          Directory="DesktopFolder"
+          Name="EFTX Diagram Suite"
+          Description="Abrir EFTX Diagram Suite"
+          Target="[INSTALLFOLDER]EFTX_DiagramSuite.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\EFTX\DiagramSuite" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="FeatMain" Title="Aplicacao" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+    </Feature>
+
+    <Feature Id="FeatStartMenu" Title="Atalho no Menu Iniciar" Level="1">
+      <ComponentRef Id="CmpShortcutStartMenu" />
+    </Feature>
+
+    <Feature Id="FeatDesktop" Title="Atalho na Area de Trabalho" Level="1">
+      <ComponentRef Id="CmpShortcutDesktop" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_FeatureTree" />
+  </Package>
+</Wix>

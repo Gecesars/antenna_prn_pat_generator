@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>T_END_FEED_8_Hpol - Dashboard</title>
+<style>
+:root{--bg:#eff4fa;--surface:#fff;--text:#0f172a;--muted:#475569;--line:#d7e2ef;--accent:#0f766e;--accent2:#1d4ed8;--chip:#eaf2fb;}
+*{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--text)}
+.wrap{max-width:1440px;margin:0 auto;padding:24px}
+.hero{background:linear-gradient(120deg,#0f172a,#19324d);color:#fff;border-radius:16px;padding:24px 28px;margin-bottom:18px;box-shadow:0 16px 36px rgba(9,18,31,.20)}
+.hero h1{margin:0;font-size:30px}.hero p{margin:8px 0 0;color:#cfdaea}
+.grid{display:grid;grid-template-columns:1fr;gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 8px 22px rgba(15,23,42,.06);overflow:hidden}
+.card-h{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px}
+.card-h h2{font-size:18px;margin:0}.tag{font-size:12px;padding:4px 9px;border-radius:999px;background:var(--chip);color:#0b4a7a;border:1px solid #cfe0f2}
+.card-b{padding:14px 18px}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+.m{border:1px solid var(--line);border-radius:10px;padding:10px;background:#fbfdff}.m .k{font-size:12px;color:var(--muted)}.m .v{margin-top:4px;font-weight:700}
+.plot{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:10px;background:#fff}
+.links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.links a{font-size:12px;text-decoration:none;color:#0f3f6d;background:var(--chip);border:1px solid #cfe0f2;padding:5px 9px;border-radius:999px}
+.foot{margin-top:16px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.foot h3{margin:0 0 10px 0;font-size:16px}.foot ul{margin:0;padding-left:18px;color:#334155}
+@media(min-width:1200px){.grid{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<section class="hero"><h1>T_END_FEED_8_Hpol</h1><p>Dashboard tecnico de diagramas e metricas (gerado pelo EFTX C++).</p></section>
+<section class="grid">
+<article class="card">
+<div class="card-h"><h2>T_END_FEED_8_Hpol | POL1 | Azimute</h2><span class="tag">AZIMUTE</span></div>
+<div class="card-b">
+<div class="metrics">
+<div class="m"><div class="k">Peak (lin)</div><div class="v">1.0000</div></div>
+<div class="m"><div class="k">Peak (dB)</div><div class="v">0.00</div></div>
+<div class="m"><div class="k">HPBW (deg)</div><div class="v">28.71</div></div>
+<div class="m"><div class="k">D2D (lin)</div><div class="v">2.975</div></div>
+<div class="m"><div class="k">D2D (dB)</div><div class="v">4.73</div></div>
+<div class="m"><div class="k">Min (dB)</div><div class="v">-28.58</div></div>
+</div>
+<img class="plot" src="T_END_FEED_8_Hpol_AZ_POL1_DIAGRAMA.svg" alt="T_END_FEED_8_Hpol | POL1 | Azimute"/>
+<div class="links"><a href="T_END_FEED_8_Hpol_AZ_POL1_TABELA.csv">Tabela CSV</a><a href="T_END_FEED_8_Hpol_AZ_POL1.pat">PAT</a><a href="T_END_FEED_8_Hpol_AZ_POL1_ADT.pat">PAT ADT</a></div>
+</div>
+</article>
+<article class="card">
+<div class="card-h"><h2>T_END_FEED_8_Hpol | POL1 | Elevacao</h2><span class="tag">ELEVACAO</span></div>
+<div class="card-b">
+<div class="metrics">
+<div class="m"><div class="k">Peak (lin)</div><div class="v">1.0000</div></div>
+<div class="m"><div class="k">Peak (dB)</div><div class="v">0.00</div></div>
+<div class="m"><div class="k">HPBW (deg)</div><div class="v">16.21</div></div>
+<div class="m"><div class="k">D2D (lin)</div><div class="v">8.834</div></div>
+<div class="m"><div class="k">D2D (dB)</div><div class="v">9.46</div></div>
+<div class="m"><div class="k">Min (dB)</div><div class="v">-26.29</div></div>
+</div>
+<img class="plot" src="T_END_FEED_8_Hpol_EL_POL1_DIAGRAMA.svg" alt="T_END_FEED_8_Hpol | POL1 | Elevacao"/>
+<div class="links"><a href="T_END_FEED_8_Hpol_EL_POL1_TABELA.csv">Tabela CSV</a><a href="T_END_FEED_8_Hpol_EL_POL1.pat">PAT</a><a href="T_END_FEED_8_Hpol_EL_POL1_ADT.pat">PAT ADT</a></div>
+</div>
+</article>
+</section>
+<section class="foot"><h3>Artefatos adicionais</h3><ul><li><a href="T_END_FEED_8_Hpol_POL1.prn">T_END_FEED_8_Hpol_POL1.prn</a></li></ul></section>
+</div>
+</body>
+</html>

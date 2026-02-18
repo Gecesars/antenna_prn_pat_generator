@@ -54,39 +54,13 @@ Project directory: D:\Simulations\Simulations\#IFTX
 [warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:04 PM  Feb 16, 2026)
 [warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:04 PM  Feb 16, 2026)
 [warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (01:53:13 PM  Feb 16, 2026)
-Mode: No Project??
-Starting Batch Run: 12:37:46 AM  Feb 15, 2026
-Running as user : RF01\geral
-Temp directory: C:\Users\geral\AppData\Local\Temp
-Project directory: D:\Simulations\Simulations\#IFTX
--- Message Window --
-      *Global - Messages
-        [info] GRPC server running on port: 63253. 
--- Message Window --
-Stopping Batch Run: 8:58:40 AM  Feb 16, 2026
- 
-Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
-Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
-Non Graphical Mode: No Project??
-Starting Batch Run: 9:01:04 AM  Feb 16, 2026
-Running as user : RF01\geral
-Temp directory: C:\Users\geral\AppData\Local\Temp
-Project directory: D:\Simulations\Simulations\#IFTX
--- Message Window --
-      *Global - Messages
-        [info] GRPC server running on port: 59122. 
--- Message Window --
- 
-Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
-Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
-Non Graphical Mode: No Project??
-Starting Batch Run: 9:11:49 AM  Feb 16, 2026
-Running as user : RF01\geral
-Temp directory: C:\Users\geral\AppData\Local\Temp
-Project directory: D:\Simulations\Simulations\#IFTX
--- Message Window --
-      *Global - Messages
-        [info] GRPC server running on port: 61259. 
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (03:58:29 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (03:58:34 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (04:01:11 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (04:01:17 PM  Feb 16, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (09:18:07 AM  Feb 17, 2026)
+[warning] Project:teste_app, Design:Pronto_300Mhz_elevacao 1 face (Modal Network), The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (09:18:13 AM  Feb 17, 2026)
+ing on port: 61259. 
 -- Message Window --
 Stopping Batch Run: 9:54:56 AM  Feb 16, 2026
  
@@ -151,3 +125,65 @@ Project directory: D:\Simulations\Simulations\#IFTX
 [warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
 
 Stopping Batch Run: 12:11:56 PM  Feb 16, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 9:17:12 AM  Feb 17, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+The project 'Project4' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 59804. 
+        [info] The project 'Project4' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+Stopping Batch Run: 9:18:54 AM  Feb 17, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 3:21:50 AM  Feb 18, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+The project 'Project4' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 64480. 
+        [info] The project 'Project4' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+Stopping Batch Run: 3:24:03 AM  Feb 18, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 3:34:54 AM  Feb 18, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+The project 'Project4' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 63013. 
+        [info] The project 'Project4' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 7:13:14 AM  Feb 18, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 7:13:14 AM  Feb 18, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 54082. 
+-- Message Window --

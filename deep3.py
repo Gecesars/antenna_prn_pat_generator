@@ -88,6 +88,50 @@ LOGGER = setup_logging()
 PERF = PerfTracer(LOGGER, threshold_s=0.010)
 
 
+def cleanup_legacy_user_install(logger: Optional[logging.Logger] = None) -> None:
+    """Remove stale per-user install artifacts from older builds.
+
+    Older installers created user-scope shortcuts and binaries under
+    LocalAppData. When both old and new installs coexist, users can launch
+    the outdated executable by mistake, causing inconsistent behavior.
+    """
+    if os.name != "nt":
+        return
+    try:
+        exe_path = os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__)
+        exe_dir = os.path.normcase(os.path.abspath(os.path.dirname(exe_path)))
+        # Only run this cleanup for the installed Program Files app path.
+        if "\\eftx broadcast\\antenna converter" not in exe_dir.lower():
+            return
+
+        home = os.path.expanduser("~")
+        removed: List[str] = []
+        legacy_shortcuts = [
+            os.path.join(home, "Desktop", "EFTX Converter.lnk"),
+            os.path.join(home, "Área de Trabalho", "EFTX Converter.lnk"),
+            os.path.join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "EFTX Converter.lnk"),
+        ]
+        for shortcut in legacy_shortcuts:
+            try:
+                if os.path.isfile(shortcut):
+                    os.remove(shortcut)
+                    removed.append(shortcut)
+            except Exception:
+                continue
+
+        legacy_dir = os.path.join(home, "AppData", "Local", "Programs", "EFTX Broadcast", "Antenna Converter")
+        legacy_dir_norm = os.path.normcase(os.path.abspath(legacy_dir))
+        if os.path.isdir(legacy_dir) and legacy_dir_norm != exe_dir:
+            shutil.rmtree(legacy_dir, ignore_errors=True)
+            removed.append(legacy_dir)
+
+        if removed and logger is not None:
+            logger.info("Legacy install cleanup applied: %s", " | ".join(removed))
+    except Exception:
+        if logger is not None:
+            logger.exception("Legacy install cleanup failed.")
+
+
 def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
     """
     Escrita atomica no mesmo diretorio do destino.
@@ -452,10 +496,15 @@ def build_diagram_export_figure(
     color = line_color or ("#d55e00" if k == "H" else "#1f77b4")
 
     if prefer_polar:
-        theta = np.deg2rad(a)
         if k == "H":
-            theta = (theta + np.pi / 2.0) % (2.0 * np.pi)
-        ax.plot(theta, v_norm, color=color, linewidth=1.6)
+            a_wrap = np.mod(a, 360.0)
+            order = np.argsort(a_wrap)
+            theta = np.deg2rad(a_wrap[order])
+            v_plot = v_norm[order]
+            ax.plot(theta, v_plot, color=color, linewidth=1.6)
+        else:
+            theta = np.deg2rad(a)
+            ax.plot(theta, v_norm, color=color, linewidth=1.6)
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
         ax.grid(True, alpha=0.3)
@@ -3118,15 +3167,8 @@ class PATConverterApp(ctk.CTk):
         ctk.CTkButton(run_row, text="Cancelar", fg_color="#666666", command=w.destroy).pack(side="right", padx=4)
 
     def _resolve_report_template_path(self) -> str:
-        candidates = [
-            REPORT_TEMPLATE_DEFAULT,
-            "/mnt/data/19cd48b4-6272-4aaa-8437-f87b5ffc2204.pdf",
-            os.path.join(ROOT_DIR, "modelo.pdf"),
-        ]
-        for c in candidates:
-            if c and os.path.isfile(c):
-                return c
-        return REPORT_TEMPLATE_DEFAULT
+        # Template oficial obrigatorio para relatorios.
+        return os.path.join(ROOT_DIR, "modelo.pdf")
 
     def _report_set_progress(self, current: int, total: int, label: str):
         with self._report_lock:
@@ -3178,6 +3220,18 @@ class PATConverterApp(ctk.CTk):
         base_name = self._project_base_name()
         pol = self._report_pol_from_tag(tag)
         freq = self._safe_meta_float(self.prn_freq.get(), 0.0)
+        if freq <= 0.0:
+            try:
+                freq = self._safe_meta_float(self.vert_freq.get(), 0.0)
+            except Exception:
+                freq = 0.0
+        if freq <= 0.0 and isinstance(self.aedt_live_last_payload, dict):
+            try:
+                meta = self.aedt_live_last_payload.get("meta", {})
+                if isinstance(meta, dict):
+                    freq = self._safe_meta_float(meta.get("freq", 0.0), 0.0)
+            except Exception:
+                pass
         expr = "E/Emax linear"
         parts = [f"Projeto: {project_name}", f"Antena: {base_name}"]
         if pol:
@@ -3185,6 +3239,63 @@ class PATConverterApp(ctk.CTk):
         parts.append(f"Freq: {freq:.3f} MHz")
         parts.append(f"Expr: {expr}")
         return " | ".join(parts)
+
+    def _report_table_spec(self, kind: str) -> Tuple[str, int]:
+        if str(kind).upper() == "H":
+            return "Azimute -180..180 deg (passo 5 deg)", 73
+        return "Elevacao -90..90 deg (passo 1 deg)", 181
+
+    def _report_page_description(
+        self,
+        tag: str,
+        kind: str,
+        raw_angles: np.ndarray,
+        table_angles: np.ndarray,
+    ) -> str:
+        source = self._report_source_from_tag(tag)
+        pol = self._report_pol_from_tag(tag)
+        plane = self._report_page_plane(kind)
+        view = "polar" if str(kind).upper() == "H" else "planar"
+        spec, target_pts = self._report_table_spec(kind)
+
+        raw_count = int(np.asarray(raw_angles, dtype=float).reshape(-1).size)
+        t_ang = np.asarray(table_angles, dtype=float).reshape(-1)
+        used_pts = int(t_ang.size)
+        if t_ang.size:
+            amin = float(np.min(t_ang))
+            amax = float(np.max(t_ang))
+            step = _estimate_step_deg(t_ang)
+        else:
+            amin = float("nan")
+            amax = float("nan")
+            step = float("nan")
+
+        pol_txt = f" ({pol})" if pol else ""
+        range_txt = (
+            f"Faixa {amin:.0f}..{amax:.0f} deg"
+            if math.isfinite(amin) and math.isfinite(amax)
+            else "Faixa n/d"
+        )
+        step_txt = f"passo {step:.1f} deg" if math.isfinite(step) else "passo n/d"
+        return (
+            f"Origem: {source}{pol_txt}. Corte de {plane.lower()} em formato {view}. "
+            f"Tabela padrao: {spec}; pontos usados {used_pts} (alvo {target_pts}) a partir de "
+            f"{raw_count} amostras. {range_txt}, {step_txt}."
+        )
+
+    def _report_default_glossary(self) -> List[Dict[str, str]]:
+        return [
+            {"term": "HRP", "definition": "Horizontal Radiation Pattern: corte de azimute da antena."},
+            {"term": "VRP", "definition": "Vertical Radiation Pattern: corte de elevacao da antena."},
+            {"term": "HPBW", "definition": "Half-Power BeamWidth: largura de feixe a -3 dB."},
+            {"term": "First Null", "definition": "Primeiro nulo adjacente ao lobo principal."},
+            {"term": "F/B", "definition": "Front-to-Back ratio: relacao frente/costa em dB."},
+            {"term": "D2D", "definition": "Diretividade linear relativa ao pico normalizado."},
+            {"term": "dB", "definition": "Escala logaritmica de amplitude: 20*log10(amplitude)." },
+            {"term": "POL1/POL2", "definition": "Primeira e segunda polarizacao em estudo."},
+            {"term": "Theta/Phi", "definition": "Coordenadas angulares da esfera de radiacao."},
+            {"term": "E/Emax", "definition": "Campo eletrico normalizado pelo valor maximo."},
+        ]
 
     def _sort_report_patterns(
         self,
@@ -3229,20 +3340,10 @@ class PATConverterApp(ctk.CTk):
 
         r1 = ctk.CTkFrame(cfg, fg_color="transparent")
         r1.pack(fill="x", padx=4, pady=(2, 4))
-        ctk.CTkLabel(r1, text="Template PDF:", width=110, anchor="w").pack(side="left")
-        ctk.CTkEntry(r1, textvariable=template_var).pack(side="left", fill="x", expand=True, padx=4)
-        ctk.CTkButton(
-            r1,
-            text="...",
-            width=40,
-            command=lambda: template_var.set(
-                filedialog.askopenfilename(
-                    title="Selecione o template PDF",
-                    filetypes=[("PDF", "*.pdf"), ("Todos", "*.*")],
-                )
-                or template_var.get()
-            ),
-        ).pack(side="left", padx=2)
+        ctk.CTkLabel(r1, text="Template base:", width=110, anchor="w").pack(side="left")
+        ent_template = ctk.CTkEntry(r1, textvariable=template_var, state="disabled")
+        ent_template.pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkLabel(r1, text="(fixo: modelo.pdf)", anchor="w").pack(side="left", padx=2)
 
         r2 = ctk.CTkFrame(cfg, fg_color="transparent")
         r2.pack(fill="x", padx=4, pady=(0, 2))
@@ -3299,7 +3400,6 @@ class PATConverterApp(ctk.CTk):
                 return
             cfg = {
                 "output_pdf": out_pdf,
-                "template_pdf": template_var.get().strip(),
                 "selected_tags": selected_tags,
                 "order_mode": order_var.get().strip(),
                 "dpi": int(dpi_var.get().strip() or "300"),
@@ -3382,7 +3482,7 @@ class PATConverterApp(ctk.CTk):
         warnings: List[str] = []
         csv_files: List[str] = []
         output_pdf = str(cfg.get("output_pdf", "") or "").strip()
-        template_pdf = str(cfg.get("template_pdf", "") or "").strip() or self._resolve_report_template_path()
+        template_pdf = self._resolve_report_template_path()
         selected_tags = [str(x) for x in cfg.get("selected_tags", [])]
         order_mode = str(cfg.get("order_mode", "Padrao"))
         dpi = int(cfg.get("dpi", 300))
@@ -3392,7 +3492,10 @@ class PATConverterApp(ctk.CTk):
         if not output_pdf:
             raise ValueError("Caminho de saida do PDF nao informado.")
         if not template_pdf or not os.path.isfile(template_pdf):
-            raise FileNotFoundError(f"Template PDF nao encontrado: {template_pdf}")
+            raise FileNotFoundError(
+                f"Template base obrigatorio nao encontrado: {template_pdf}. "
+                f"Coloque o arquivo 'modelo.pdf' na pasta raiz da aplicacao."
+            )
 
         patterns_all = []
         seen = set()
@@ -3452,17 +3555,20 @@ class PATConverterApp(ctk.CTk):
                     tbl_ang, tbl_val = self._table_points_vertical(angles, values)
                 tbl_db = linear_to_db(np.asarray(tbl_val, dtype=float))
                 rows = [[float(a_i), float(v_i)] for a_i, v_i in zip(tbl_ang, tbl_db)]
+                table_note, _ = self._report_table_spec(kind)
+                page_desc = self._report_page_description(tag, kind, angles, tbl_ang)
 
                 pages_payload.append(
                     {
                         "page_title": title,
                         "page_subtitle": subtitle,
+                        "page_description": page_desc,
                         "plot_image_path": plot_path,
                         "metrics": metrics,
                         "table": {
                             "columns": ["Ang [deg]", "Valor [dB]"],
                             "rows": rows,
-                            "note": "",
+                            "note": f"Tabela padrao: {table_note}.",
                         },
                     }
                 )
@@ -3482,6 +3588,7 @@ class PATConverterApp(ctk.CTk):
                 "report_title": f"Relatorio {self._project_base_name()}",
                 "author": self.author_var.get().strip() or "EFTX",
                 "pages": pages_payload,
+                "glossary": self._report_default_glossary(),
             }
 
             def _pdf_progress(cur: int, total: int, label: str):
@@ -5406,7 +5513,7 @@ class PATConverterApp(ctk.CTk):
         return target, v_interp
 
     def _table_points_horizontal(self, angles: np.ndarray, values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        target = np.arange(-180, 180, 5, dtype=float)  # 72 pontos
+        target = np.arange(-180.0, 180.0 + 1e-9, 5.0, dtype=float)  # 73 pontos
         a_src, v_src = resample_horizontal(angles, values, norm="none")
         src_ang_360 = np.mod(a_src, 360.0)
         order = np.argsort(src_ang_360)
@@ -5750,23 +5857,31 @@ class PATConverterApp(ctk.CTk):
                         t_ang, t_val = self._table_points_vertical(angles, values)
                     m = compute_diagram_metrics(kind, t_ang, t_val)
                     rows = [[float(a_i), float(d_i)] for a_i, d_i in zip(t_ang, linear_to_db(t_val))]
+                    table_note, _ = self._report_table_spec(kind)
+                    page_desc = self._report_page_description(tag, kind, angles, t_ang)
                     pages.append(
                         {
                             "page_title": f"Diagrama {tag.upper()} ({'Azimute' if kind == 'H' else 'Elevacao'})",
                             "page_subtitle": self._report_page_subtitle(tag, kind),
+                            "page_description": page_desc,
                             "plot_image_path": plot_path,
                             "metrics": m,
                             "table": {
                                 "columns": ["Ang [deg]", "Valor [dB]"],
                                 "rows": rows,
-                                "note": "",
+                                "note": f"Tabela padrao: {table_note}.",
                             },
                         }
                     )
                 report_path = os.path.join(out_report, f"{base}_relatorio.pdf")
                 report_csv_dir = os.path.join(out_report, "tabelas_csv")
                 rep = export_report_pdf(
-                    payload={"report_title": f"Relatorio {base}", "author": self.author_var.get().strip() or "EFTX", "pages": pages},
+                    payload={
+                        "report_title": f"Relatorio {base}",
+                        "author": self.author_var.get().strip() or "EFTX",
+                        "pages": pages,
+                        "glossary": self._report_default_glossary(),
+                    },
                     output_pdf_path=report_path,
                     template_pdf_path=report_template,
                     save_full_csv=True,
@@ -6858,22 +6973,80 @@ class PATConverterApp(ctk.CTk):
         info_card = ctk.CTkFrame(right_grid)
         info_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
 
-        ctk.CTkLabel(info_card, text="Metricas do Diagrama", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(8, 4))
-        self.vert_peak = tk.StringVar(value="Pico: -")
-        self.vert_hpbw = tk.StringVar(value="HPBW: -")
-        self.vert_d2d = tk.StringVar(value="D2D: -")
-        ctk.CTkLabel(info_card, textvariable=self.vert_peak).pack(anchor="w", padx=8, pady=2)
-        ctk.CTkLabel(info_card, textvariable=self.vert_hpbw).pack(anchor="w", padx=8, pady=2)
-        ctk.CTkLabel(info_card, textvariable=self.vert_d2d).pack(anchor="w", padx=8, pady=2)
+        metrics_card = ctk.CTkFrame(info_card)
+        metrics_card.pack(fill=ctk.X, padx=8, pady=(8, 6))
+        ctk.CTkLabel(metrics_card, text="Metricas do Diagrama", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(6, 4)
+        )
 
-        ctk.CTkLabel(info_card, text="Dados da Composicao", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=8, pady=(10, 4))
+        self.vert_peak = tk.StringVar(value="-")
+        self.vert_hpbw = tk.StringVar(value="-")
+        self.vert_d2d = tk.StringVar(value="-")
+        self.vert_d2d_db = tk.StringVar(value="-")
+
+        def _metric_row(parent, label, var):
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill=ctk.X, padx=8, pady=2)
+            ctk.CTkLabel(row, text=label, width=90, anchor="w").pack(side=ctk.LEFT)
+            ctk.CTkLabel(row, textvariable=var, font=ctk.CTkFont(weight="bold")).pack(side=ctk.LEFT, padx=(6, 0))
+
+        _metric_row(metrics_card, "Pico:", self.vert_peak)
+        _metric_row(metrics_card, "HPBW:", self.vert_hpbw)
+        _metric_row(metrics_card, "D2D:", self.vert_d2d)
+        _metric_row(metrics_card, "D2D (dB):", self.vert_d2d_db)
+
+        comp_head = ctk.CTkFrame(info_card, fg_color="transparent")
+        comp_head.pack(fill=ctk.X, padx=8, pady=(6, 4))
+        ctk.CTkLabel(comp_head, text="Dados da Composicao", font=ctk.CTkFont(weight="bold")).pack(
+            side=ctk.LEFT
+        )
+        ctk.CTkButton(
+            comp_head,
+            text="Copiar resumo",
+            width=120,
+            command=self._copy_vertical_summary,
+            fg_color="#3c6e71",
+        ).pack(side=ctk.RIGHT)
+
+        comp_table = ctk.CTkFrame(info_card)
+        comp_table.pack(fill=ctk.X, padx=8, pady=(0, 6))
+        self.vert_info_mode = tk.StringVar(value="-")
+        self.vert_info_n = tk.StringVar(value="-")
+        self.vert_info_freq = tk.StringVar(value="-")
+        self.vert_info_spacing = tk.StringVar(value="-")
+        self.vert_info_tilt = tk.StringVar(value="-")
+        self.vert_info_null_target = tk.StringVar(value="-")
+        self.vert_info_null_achieved = tk.StringVar(value="-")
+        self.vert_info_phase_limit = tk.StringVar(value="-")
+        self.vert_info_peak_eps = tk.StringVar(value="-")
+        self.vert_info_cond = tk.StringVar(value="-")
+
+        def _comp_row(parent, label, var):
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill=ctk.X, padx=8, pady=1)
+            ctk.CTkLabel(row, text=label, width=130, anchor="w").pack(side=ctk.LEFT)
+            ctk.CTkLabel(row, textvariable=var, anchor="w").pack(side=ctk.LEFT, padx=(6, 0))
+
+        _comp_row(comp_table, "Controle:", self.vert_info_mode)
+        _comp_row(comp_table, "Niveis (N):", self.vert_info_n)
+        _comp_row(comp_table, "Frequencia:", self.vert_info_freq)
+        _comp_row(comp_table, "Espacamento:", self.vert_info_spacing)
+        _comp_row(comp_table, "Tilt eletrico:", self.vert_info_tilt)
+        _comp_row(comp_table, "Nulo alvo:", self.vert_info_null_target)
+        _comp_row(comp_table, "Fill atingido:", self.vert_info_null_achieved)
+        _comp_row(comp_table, "Pico elevacao:", self.vert_info_peak_eps)
+        _comp_row(comp_table, "Limite de fase:", self.vert_info_phase_limit)
+        _comp_row(comp_table, "Cond. LSQ:", self.vert_info_cond)
+
+        ctk.CTkLabel(info_card, text="Detalhes / Pesos", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(2, 4)
+        )
         self.vert_comp_info_text = ctk.CTkTextbox(info_card, wrap="none")
         self.vert_comp_info_text.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
-        self.vert_comp_info_text.insert(
-            "0.0",
+        self._set_readonly_text(
+            self.vert_comp_info_text,
             "Calcule o diagrama para visualizar os dados tecnicos da composicao.",
         )
-        self.vert_comp_info_text.configure(state="disabled")
         # Compatibilidade com metodos existentes
         self.vert_weights_text = self.vert_comp_info_text
 
@@ -6903,6 +7076,81 @@ class PATConverterApp(ctk.CTk):
             return int(var.get())
         except (ValueError, tk.TclError):
             return default
+
+    def _set_readonly_text(self, textbox, text: str):
+        if textbox is None:
+            return
+        try:
+            textbox.configure(state="normal")
+            textbox.delete("0.0", "end")
+            textbox.insert("0.0", str(text or ""))
+            textbox.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _copy_vertical_summary(self):
+        try:
+            lines = [
+                "COMPOSICAO VERTICAL",
+                f"Pico: {self.vert_peak.get()}",
+                f"HPBW: {self.vert_hpbw.get()}",
+                f"D2D: {self.vert_d2d.get()}",
+                f"D2D (dB): {self.vert_d2d_db.get()}",
+                "",
+                f"Controle: {self.vert_info_mode.get()}",
+                f"Niveis (N): {self.vert_info_n.get()}",
+                f"Frequencia: {self.vert_info_freq.get()}",
+                f"Espacamento: {self.vert_info_spacing.get()}",
+                f"Tilt eletrico: {self.vert_info_tilt.get()}",
+                f"Nulo alvo: {self.vert_info_null_target.get()}",
+                f"Fill atingido: {self.vert_info_null_achieved.get()}",
+                f"Pico elevacao: {self.vert_info_peak_eps.get()}",
+                f"Limite de fase: {self.vert_info_phase_limit.get()}",
+                f"Cond. LSQ: {self.vert_info_cond.get()}",
+            ]
+            details = ""
+            if getattr(self, "vert_comp_info_text", None) is not None:
+                details = self.vert_comp_info_text.get("0.0", "end").strip()
+            txt = "\n".join(lines)
+            if details:
+                txt += f"\n\nDETALHES / PESOS\n{details}"
+            self.clipboard_clear()
+            self.clipboard_append(txt)
+            self._set_status("Resumo vertical copiado para area de transferencia.")
+        except Exception:
+            LOGGER.exception("Falha ao copiar resumo vertical.")
+            messagebox.showwarning("Aviso", "Nao foi possivel copiar o resumo vertical.")
+
+    def _copy_horizontal_summary(self):
+        try:
+            lines = [
+                "COMPOSICAO HORIZONTAL",
+                f"Pico: {self.horz_peak.get()}",
+                f"HPBW: {self.horz_hpbw.get()}",
+                f"D2D: {self.horz_d2d.get()}",
+                f"D2D (dB): {self.horz_d2d_db.get()}",
+                "",
+                f"Modelo: {self.horz_info_mode.get()}",
+                f"Paineis (N): {self.horz_info_n.get()}",
+                f"Frequencia: {self.horz_info_freq.get()}",
+                f"Espacamento: {self.horz_info_spacing.get()}",
+                f"DeltaPhi: {self.horz_info_dphi.get()}",
+                f"Beta: {self.horz_info_beta.get()}",
+                f"Nivel: {self.horz_info_level.get()}",
+                f"Raio equivalente: {self.horz_info_radius.get()}",
+            ]
+            details = ""
+            if getattr(self, "horz_comp_info_text", None) is not None:
+                details = self.horz_comp_info_text.get("0.0", "end").strip()
+            txt = "\n".join(lines)
+            if details:
+                txt += f"\n\nDETALHES DO MODELO\n{details}"
+            self.clipboard_clear()
+            self.clipboard_append(txt)
+            self._set_status("Resumo horizontal copiado para area de transferencia.")
+        except Exception:
+            LOGGER.exception("Falha ao copiar resumo horizontal.")
+            messagebox.showwarning("Aviso", "Nao foi possivel copiar o resumo horizontal.")
 
     def _update_vertical_weights_view(
         self,
@@ -6970,27 +7218,44 @@ class PATConverterApp(ctk.CTk):
                     continue
 
         freq_hz = self._freq_to_hz(self._get_float_value(self.vert_freq, 0.0), self.vert_funit.get())
-        lam0 = C0 / max(freq_hz, 1.0)
-        lines = [
-            f"Modo de controle: {mode}",
-            f"Niveis (N): {self._get_int_value(self.vert_N, n)}",
-            f"Frequencia: {self.vert_freq.get()} {self.vert_funit.get()} (lambda0={lam0:.4f} m)",
-            f"Espacamento: {self._get_float_value(self.vert_space, 0.0):.4f} m",
-            f"Tilt eletrico: {self._get_float_value(self.vert_tilt_elec_deg, 0.0):.2f} deg",
-            f"Null fill alvo: {target_percent}",
-            f"Null fill atingido (medio): {achieved_percent}",
-            f"Nulo selecionado: {null_order}o",
-            f"Pico em elevacao: {peak_eps}",
-            f"Limite automatico de fase: {phase_limit}",
-            f"Condicionamento LSQ: {cond_txt}",
-            "",
-            "Evolucao do(s) nulo(s):",
-        ]
+        freq_val = self._get_float_value(self.vert_freq, 0.0)
+        spacing_m = self._get_float_value(self.vert_space, 0.0)
+        tilt_deg = self._get_float_value(self.vert_tilt_elec_deg, 0.0)
+        if str(null_order).strip() in ("", "-"):
+            null_target_txt = "-"
+        else:
+            null_target_txt = f"{null_order}o nulo"
+            if target_percent != "-":
+                null_target_txt = f"{null_target_txt} ({target_percent})"
+
+        if hasattr(self, "vert_info_mode"):
+            self.vert_info_mode.set(str(mode).upper())
+        if hasattr(self, "vert_info_n"):
+            self.vert_info_n.set(str(self._get_int_value(self.vert_N, n)))
+        if hasattr(self, "vert_info_freq"):
+            self.vert_info_freq.set(f"{freq_val:.3f} {self.vert_funit.get()}")
+        if hasattr(self, "vert_info_spacing"):
+            self.vert_info_spacing.set(f"{spacing_m:.4f} m")
+        if hasattr(self, "vert_info_tilt"):
+            self.vert_info_tilt.set(f"{tilt_deg:.2f} deg")
+        if hasattr(self, "vert_info_null_target"):
+            self.vert_info_null_target.set(null_target_txt)
+        if hasattr(self, "vert_info_null_achieved"):
+            self.vert_info_null_achieved.set(achieved_percent)
+        if hasattr(self, "vert_info_peak_eps"):
+            self.vert_info_peak_eps.set(peak_eps)
+        if hasattr(self, "vert_info_phase_limit"):
+            self.vert_info_phase_limit.set(phase_limit)
+        if hasattr(self, "vert_info_cond"):
+            self.vert_info_cond.set(cond_txt)
+
+        lines = ["EVOLUCAO DOS NULOS"]
         lines.extend(null_summary if null_summary else ["-"])
         lines.extend([
             "",
-            "Nivel |   |w|    | Pot[%] | Fase[deg] | AttRef[dB] | DeltaL[m]",
-            "---------------------------------------------------------------",
+            "PESOS POR NIVEL",
+            "Nivel |    |w|   | Pot[%] | Fase[deg] | AttRef[dB] | DeltaL[m] | Posicao",
+            "----------------------------------------------------------------------",
         ])
 
         for idx in range(1, n + 1):
@@ -7001,14 +7266,11 @@ class PATConverterApp(ctk.CTk):
             dl = float(delta_len_m[idx - 1]) if idx - 1 < delta_len_m.size else 0.0
             pos = "inferior" if idx == 1 else ("superior" if idx == n else "intermediario")
             lines.append(
-                f"{idx:>3d} ({pos}) | {a:>8.5f} | {p:>6.2f} | {ph:>9.3f} | {at:>10.3f} | {dl:>8.5f}"
+                f"{idx:>3d}  | {a:>8.5f} | {p:>6.2f} | {ph:>9.3f} | {at:>10.3f} | {dl:>8.5f} | {pos}"
             )
 
         box = self.vert_weights_text
-        box.configure(state="normal")
-        box.delete("0.0", "end")
-        box.insert("0.0", "\n".join(lines))
-        box.configure(state="disabled")
+        self._set_readonly_text(box, "\n".join(lines))
 
     def compute_vertical_array(self):
         if self.v_angles is None or self.v_vals is None:
@@ -7110,10 +7372,10 @@ class PATConverterApp(ctk.CTk):
             )
 
             # Atualiza labels e buffers
-            self.vert_peak.set(f"Pico: {peak:.3f}")
-            self.vert_hpbw.set(f"HPBW: {hpbw:.2f} deg" if math.isfinite(hpbw) else "HPBW: -")
-            d2d_text = f"D2D: {d2d:.3f} ({d2d_db:.2f} dB)" if math.isfinite(d2d) else "D2D: -"
-            self.vert_d2d.set(d2d_text)
+            self.vert_peak.set(f"{peak:.3f}")
+            self.vert_hpbw.set(f"{hpbw:.2f} deg" if math.isfinite(hpbw) else "-")
+            self.vert_d2d.set(f"{d2d:.3f}" if math.isfinite(d2d) else "-")
+            self.vert_d2d_db.set(f"{d2d_db:.2f} dB" if math.isfinite(d2d_db) else "-")
             self.vert_angles = base_angles
             self.vert_values = E_comp
             self._set_status("VRP composto calculado com preenchimento por ordem de nulo.")
@@ -7430,27 +7692,98 @@ class PATConverterApp(ctk.CTk):
         ctk.CTkButton(export_btn_frame, text="Export .PRN", command=self.export_horizontal_array_prn, 
                      fg_color="#aa6622", width=100).pack(side=ctk.LEFT, padx=2)
 
-        # Metricas
-        metrics_frame = ctk.CTkFrame(input_frame)
-        metrics_frame.pack(fill=ctk.X, padx=8, pady=8)
-        ctk.CTkLabel(metrics_frame, text="Metricas", font=ctk.CTkFont(weight="bold")).pack(pady=(4, 8))
-        
-        self.horz_peak = tk.StringVar(value="Pico: -")
-        self.horz_hpbw = tk.StringVar(value="HPBW: -")
-        self.horz_d2d  = tk.StringVar(value="D2D: -")
-        
-        ctk.CTkLabel(metrics_frame, textvariable=self.horz_peak, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=2)
-        ctk.CTkLabel(metrics_frame, textvariable=self.horz_hpbw, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=2)
-        ctk.CTkLabel(metrics_frame, textvariable=self.horz_d2d, font=ctk.CTkFont(size=12)).pack(anchor="w", pady=2)
+        # Painel direito: grafico + metricas/dados
+        right_grid = ctk.CTkFrame(plot_frame, fg_color="transparent")
+        right_grid.pack(fill=ctk.BOTH, expand=True, padx=4, pady=4)
+        right_grid.grid_rowconfigure(0, weight=1)
+        right_grid.grid_columnconfigure(0, weight=3)
+        right_grid.grid_columnconfigure(1, weight=2)
+
+        graph_card = ctk.CTkFrame(right_grid)
+        graph_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
 
         # Plot - EM POLAR
         self.fig_h2 = Figure(figsize=(8, 6), dpi=100)
         self.ax_h2  = self.fig_h2.add_subplot(111, projection='polar')
         self.ax_h2.set_title("HRP Composto - Array Horizontal", pad=20)
         self.ax_h2.grid(True, alpha=0.3)
-        self.canvas_h2 = FigureCanvasTkAgg(self.fig_h2, master=plot_frame)
+        self.canvas_h2 = FigureCanvasTkAgg(self.fig_h2, master=graph_card)
         self.canvas_h2.get_tk_widget().pack(fill=ctk.BOTH, expand=True, padx=8, pady=8)
         self.canvas_h2.mpl_connect("button_press_event", self._show_horizontal_comp_context_menu)
+
+        info_card = ctk.CTkFrame(right_grid)
+        info_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
+
+        metrics_card = ctk.CTkFrame(info_card)
+        metrics_card.pack(fill=ctk.X, padx=8, pady=(8, 6))
+        ctk.CTkLabel(metrics_card, text="Metricas do Diagrama", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(6, 4)
+        )
+
+        self.horz_peak = tk.StringVar(value="-")
+        self.horz_hpbw = tk.StringVar(value="-")
+        self.horz_d2d  = tk.StringVar(value="-")
+        self.horz_d2d_db = tk.StringVar(value="-")
+
+        def _metric_row(parent, label, var):
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill=ctk.X, padx=8, pady=2)
+            ctk.CTkLabel(row, text=label, width=90, anchor="w").pack(side=ctk.LEFT)
+            ctk.CTkLabel(row, textvariable=var, font=ctk.CTkFont(weight="bold")).pack(side=ctk.LEFT, padx=(6, 0))
+
+        _metric_row(metrics_card, "Pico:", self.horz_peak)
+        _metric_row(metrics_card, "HPBW:", self.horz_hpbw)
+        _metric_row(metrics_card, "D2D:", self.horz_d2d)
+        _metric_row(metrics_card, "D2D (dB):", self.horz_d2d_db)
+
+        comp_head = ctk.CTkFrame(info_card, fg_color="transparent")
+        comp_head.pack(fill=ctk.X, padx=8, pady=(6, 4))
+        ctk.CTkLabel(comp_head, text="Dados da Composicao", font=ctk.CTkFont(weight="bold")).pack(
+            side=ctk.LEFT
+        )
+        ctk.CTkButton(
+            comp_head,
+            text="Copiar resumo",
+            width=120,
+            command=self._copy_horizontal_summary,
+            fg_color="#3c6e71",
+        ).pack(side=ctk.RIGHT)
+
+        comp_table = ctk.CTkFrame(info_card)
+        comp_table.pack(fill=ctk.X, padx=8, pady=(0, 6))
+        self.horz_info_mode = tk.StringVar(value="-")
+        self.horz_info_n = tk.StringVar(value="-")
+        self.horz_info_freq = tk.StringVar(value="-")
+        self.horz_info_spacing = tk.StringVar(value="-")
+        self.horz_info_dphi = tk.StringVar(value="-")
+        self.horz_info_beta = tk.StringVar(value="-")
+        self.horz_info_level = tk.StringVar(value="-")
+        self.horz_info_radius = tk.StringVar(value="-")
+
+        def _comp_row(parent, label, var):
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill=ctk.X, padx=8, pady=1)
+            ctk.CTkLabel(row, text=label, width=130, anchor="w").pack(side=ctk.LEFT)
+            ctk.CTkLabel(row, textvariable=var, anchor="w").pack(side=ctk.LEFT, padx=(6, 0))
+
+        _comp_row(comp_table, "Modelo:", self.horz_info_mode)
+        _comp_row(comp_table, "Paineis (N):", self.horz_info_n)
+        _comp_row(comp_table, "Frequencia:", self.horz_info_freq)
+        _comp_row(comp_table, "Espacamento:", self.horz_info_spacing)
+        _comp_row(comp_table, "DeltaPhi:", self.horz_info_dphi)
+        _comp_row(comp_table, "Beta:", self.horz_info_beta)
+        _comp_row(comp_table, "Nivel:", self.horz_info_level)
+        _comp_row(comp_table, "Raio eq.:", self.horz_info_radius)
+
+        ctk.CTkLabel(info_card, text="Detalhes do Modelo", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=8, pady=(2, 4)
+        )
+        self.horz_comp_info_text = ctk.CTkTextbox(info_card, wrap="none")
+        self.horz_comp_info_text.pack(fill=ctk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self._set_readonly_text(
+            self.horz_comp_info_text,
+            "Calcule o diagrama para visualizar os dados tecnicos da composicao.",
+        )
 
         # buffers
         self.horz_angles = None
@@ -7542,10 +7875,23 @@ class PATConverterApp(ctk.CTk):
             self._plot_horizontal_composite(base_angles, E_comp_mag)
 
             # Atualiza labels e buffers
-            self.horz_peak.set(f"Pico: {peak:.3f}")
-            self.horz_hpbw.set(f"HPBW: {hpbw:.2f} deg" if math.isfinite(hpbw) else "HPBW: -")
-            d2d_text = f"D2D: {d2d:.3f} ({d2d_db:.2f} dB)" if math.isfinite(d2d) else "D2D: -"
-            self.horz_d2d.set(d2d_text)
+            self.horz_peak.set(f"{peak:.3f}")
+            self.horz_hpbw.set(f"{hpbw:.2f} deg" if math.isfinite(hpbw) else "-")
+            self.horz_d2d.set(f"{d2d:.3f}" if math.isfinite(d2d) else "-")
+            self.horz_d2d_db.set(f"{d2d_db:.2f} dB" if math.isfinite(d2d_db) else "-")
+            self._update_horizontal_info_view(
+                N=N,
+                freq_hz=f_hz,
+                spacing_m=s,
+                dphi_deg=dphi_deg,
+                beta_deg=beta_deg,
+                level_amp=w,
+                radius_m=R,
+                peak=peak,
+                hpbw=hpbw,
+                d2d=d2d,
+                d2d_db=d2d_db,
+            )
             self.horz_angles = base_angles
             self.horz_values = E_comp_mag
             self._set_status("HRP composto calculado.")
@@ -7567,6 +7913,57 @@ class PATConverterApp(ctk.CTk):
         self.ax_h2.set_theta_direction(-1)
         self.canvas_h2.draw_idle()
         self._notify_advanced_data_changed()
+
+    def _update_horizontal_info_view(
+        self,
+        *,
+        N: int,
+        freq_hz: float,
+        spacing_m: float,
+        dphi_deg: float,
+        beta_deg: float,
+        level_amp: float,
+        radius_m: float,
+        peak: float,
+        hpbw: float,
+        d2d: float,
+        d2d_db: float,
+    ):
+        if not hasattr(self, "horz_comp_info_text"):
+            return
+        if hasattr(self, "horz_info_mode"):
+            self.horz_info_mode.set("Poligono regular")
+        if hasattr(self, "horz_info_n"):
+            self.horz_info_n.set(str(int(N)))
+        if hasattr(self, "horz_info_freq"):
+            self.horz_info_freq.set(f"{freq_hz/1e6:.3f} MHz")
+        if hasattr(self, "horz_info_spacing"):
+            self.horz_info_spacing.set(f"{float(spacing_m):.4f} m")
+        if hasattr(self, "horz_info_dphi"):
+            self.horz_info_dphi.set(f"{float(dphi_deg):.2f} deg")
+        if hasattr(self, "horz_info_beta"):
+            self.horz_info_beta.set(f"{float(beta_deg):.2f} deg/painel")
+        if hasattr(self, "horz_info_level"):
+            self.horz_info_level.set(f"{float(level_amp):.4f}")
+        if hasattr(self, "horz_info_radius"):
+            self.horz_info_radius.set(f"{float(radius_m):.4f} m")
+
+        lines = [
+            "CONFIGURACAO GEOMETRICA",
+            f"Painel de referencia em 0.00 deg e distribuicao uniforme com DeltaPhi={float(dphi_deg):.2f} deg.",
+            f"Raio equivalente do poligono: {float(radius_m):.4f} m para espacamento alvo {float(spacing_m):.4f} m.",
+            "",
+            "EXCITACAO",
+            f"Nivel uniforme: {float(level_amp):.4f}",
+            f"Beta progressivo: {float(beta_deg):.2f} deg/painel",
+            "",
+            "METRICAS RESUMIDAS",
+            f"Pico={float(peak):.4f} | HPBW={float(hpbw):.2f} deg" if math.isfinite(hpbw) else f"Pico={float(peak):.4f} | HPBW=-",
+            f"D2D={float(d2d):.4f} | D2D(dB)={float(d2d_db):.2f} dB"
+            if math.isfinite(d2d) and math.isfinite(d2d_db)
+            else "D2D=- | D2D(dB)=-",
+        ]
+        self._set_readonly_text(self.horz_comp_info_text, "\n".join(lines))
 
     def export_horizontal_array_pat(self):
         if self.horz_angles is None or self.horz_values is None:
@@ -7668,6 +8065,7 @@ class PATConverterApp(ctk.CTk):
 
 if __name__ == "__main__":
     try:
+        cleanup_legacy_user_install(LOGGER)
         app = PATConverterApp()
         LOGGER.info("Aplicacao iniciada com sucesso.")
         app.mainloop()

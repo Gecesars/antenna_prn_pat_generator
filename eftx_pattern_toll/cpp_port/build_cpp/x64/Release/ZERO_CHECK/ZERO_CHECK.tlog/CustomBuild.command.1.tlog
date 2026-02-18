@@ -1,0 +1,10 @@
+^D:\DEV\CONVERSOR_HFSS_PAT_RFS\EFTX_PATTERN_TOLL\CPP_PORT\BUILD_CPP\CMAKEFILES\47F85AA027E832239BD188842FA1B41B\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SD:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port -BD:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_cpp --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file D:/dev/Conversor_hfss_pat_RFS/eftx_pattern_toll/cpp_port/build_cpp/EFTXPatternToolCpp.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

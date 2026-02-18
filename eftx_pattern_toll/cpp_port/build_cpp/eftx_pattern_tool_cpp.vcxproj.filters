@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\cpp_port\src\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\cpp_port\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{EE8E81D5-C887-32D7-8F61-D616C6EE88A1}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

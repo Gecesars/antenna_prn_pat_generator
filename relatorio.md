@@ -3,7 +3,7 @@
 > **Objetivo**  
 Implementar a exportação de um **relatório PDF multipágina** com **1 diagrama + 1 tabela + métricas por página**, gerado a partir dos dados do projeto/diagramas já carregados na aplicação, usando como **template de fundo** o arquivo PDF fornecido (anexo do projeto).
 
-**Template (underlay) a usar:** `/mnt/data/19cd48b4-6272-4aaa-8437-f87b5ffc2204.pdf`
+**Template (underlay) a usar:** `./modelo.pdf
 
 ---
 

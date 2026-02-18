@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\cpp_port\build_visual\CMakeFiles\da8e2056ba7f40d2d5b708f1b459259f\PACKAGE_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{70FD5198-A8AE-3E5E-8FB1-7CFF62B38F14}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

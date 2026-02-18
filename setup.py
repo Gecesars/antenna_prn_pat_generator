@@ -1,18 +1,19 @@
 import os
 import sys
+from pathlib import Path
 
 from cx_Freeze import Executable, setup
 
 
 APP_NAME = "EFTX Antenna Converter"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.10"
 APP_DESCRIPTION = "Conversor profissional de diagramas de antena (PAT/PRN/ADT)"
 APP_COMPANY = "EFTX Broadcast"
 APP_AUTHOR = "Gecesars"
 APP_URL = "https://github.com/Gecesars/antenna_prn_pat_generator"
 
 EXE_NAME = "EFTX_Converter.exe"
-MSI_NAME = "EFTX_Antenna_Converter_1.3.0_win64.msi"
+MSI_NAME = "EFTX_Antenna_Converter_1.3.10_win64.msi"
 
 # Keep this constant across releases so MSI upgrades work correctly.
 UPGRADE_CODE = "{952E3852-5953-4393-9467-336714151614}"
@@ -21,6 +22,24 @@ LICENSE_RTF = os.path.join("installer", "EULA_README_GPL.rtf")
 
 
 def build_include_files():
+    def _find_runtime_dll(name: str) -> str:
+        roots = []
+        for root in (
+            Path(sys.executable).resolve().parent,
+            Path(sys.base_prefix),
+            Path(sys.base_prefix) / "DLLs",
+            Path(sys.exec_prefix),
+            Path(sys.exec_prefix) / "DLLs",
+            Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32",
+        ):
+            if root not in roots:
+                roots.append(root)
+        for root in roots:
+            p = root / name
+            if p.exists():
+                return str(p)
+        return ""
+
     files = [
         ("eftx-logo.png", "eftx-logo.png"),
         ("eftx-ico.ico", "eftx-ico.ico"),
@@ -38,6 +57,30 @@ def build_include_files():
 
     ctk_path = os.path.dirname(customtkinter.__file__)
     files.append((ctk_path, "lib/customtkinter"))
+
+    # Ensure typing_extensions is available in frozen runtime.
+    # PyAEDT -> jsonschema -> referencing expects TypeVar(default=...),
+    # which relies on typing_extensions in Python 3.12.
+    import typing_extensions
+
+    te_path = getattr(typing_extensions, "__file__", "")
+    if te_path:
+        files.append((te_path, "lib/typing_extensions.py"))
+
+    # Keep critical runtime DLLs close to psutil extension module.
+    # This avoids DLL lookup issues in some installed environments.
+    for dll_name in (
+        "python3.dll",
+        "python312.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "msvcp140.dll",
+        "concrt140.dll",
+    ):
+        dll_path = _find_runtime_dll(dll_name)
+        if dll_path:
+            files.append((dll_path, dll_name))
+            files.append((dll_path, f"lib/psutil/{dll_name}"))
     return files
 
 
@@ -111,6 +154,27 @@ build_exe_options = {
         "plugins",
         "plugins.aedt_live",
         "plugins.aedt_live.aedt_live_plugin",
+        # AEDT/PyAEDT runtime stack (explicit to keep legacy MSI reliable)
+        "typing_extensions",
+        "jsonschema",
+        "referencing",
+        "attr",
+        "attrs",
+        "rpds",
+        "ansys",
+        "ansys.aedt",
+        "ansys.aedt.core",
+        "ansys.api",
+        "ansys.api.edb",
+        "ansys.edb",
+        "pyedb",
+        "grpc",
+        "clr_loader",
+        "pythonnet",
+    ],
+    "includes": [
+        # Needed by referencing/jsonschema stack used transitively by PyAEDT.
+        "typing_extensions",
     ],
     "include_files": build_include_files(),
     "include_msvcr": True,

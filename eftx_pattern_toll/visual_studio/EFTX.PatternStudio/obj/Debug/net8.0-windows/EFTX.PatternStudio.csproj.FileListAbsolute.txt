@@ -1,0 +1,15 @@
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\bin\Debug\net8.0-windows\EFTX.PatternStudio.exe
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\bin\Debug\net8.0-windows\EFTX.PatternStudio.deps.json
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\bin\Debug\net8.0-windows\EFTX.PatternStudio.runtimeconfig.json
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\bin\Debug\net8.0-windows\EFTX.PatternStudio.dll
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\bin\Debug\net8.0-windows\EFTX.PatternStudio.pdb
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.GeneratedMSBuildEditorConfig.editorconfig
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.AssemblyInfoInputs.cache
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.AssemblyInfo.cs
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.csproj.CoreCompileInputs.cache
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.sourcelink.json
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.dll
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\refint\EFTX.PatternStudio.dll
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.pdb
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\EFTX.PatternStudio.genruntimeconfig.cache
+D:\dev\Conversor_hfss_pat_RFS\eftx_pattern_toll\visual_studio\EFTX.PatternStudio\obj\Debug\net8.0-windows\ref\EFTX.PatternStudio.dll
