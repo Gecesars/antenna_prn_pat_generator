@@ -22,6 +22,68 @@ _PATH_DIRS_ADDED: set[str] = set()
 _PSUTIL_BACKEND: str = "uninitialized"
 
 
+def _sanitize_sys_path_for_pyvista() -> None:
+    """Drop shadowing paths that can hijack ``import pyvista``."""
+    bad_suffixes = (
+        os.path.normcase(os.path.normpath(r"ansys\tools\visualization_interface\backends")),
+        os.path.normcase(os.path.normpath(r"ansys\tools\visualization_interface\backends\pyvista")),
+    )
+    cleaned: list[str] = []
+    changed = False
+    for entry in list(sys.path):
+        try:
+            norm = os.path.normcase(os.path.normpath(str(entry or "")))
+        except Exception:
+            norm = ""
+        if any(norm.endswith(sfx) for sfx in bad_suffixes):
+            changed = True
+            continue
+        cleaned.append(entry)
+    if changed:
+        sys.path[:] = cleaned
+
+
+def _is_bad_pyvista_module(mod) -> bool:
+    """Detect broken or shadowed ``pyvista`` imports."""
+    if mod is None:
+        return True
+    try:
+        mod_file = str(getattr(mod, "__file__", "") or "").replace("/", "\\").lower()
+    except Exception:
+        mod_file = ""
+    if "ansys\\tools\\visualization_interface\\backends\\pyvista\\pyvista.py" in mod_file:
+        return True
+    if not hasattr(mod, "_plot"):
+        return True
+    return False
+
+
+def _reset_pyvista_modules() -> None:
+    """Remove pyvista-related modules from import cache."""
+    for key in list(sys.modules.keys()):
+        k = str(key or "")
+        if k == "pyvista" or k.startswith("pyvista."):
+            sys.modules.pop(k, None)
+
+
+def _ensure_pyvista_sane() -> None:
+    """Ensure pyvista points to the real package, not a shadowed module."""
+    _sanitize_sys_path_for_pyvista()
+    try:
+        import pyvista as pv  # type: ignore
+        if _is_bad_pyvista_module(pv):
+            raise RuntimeError("bad_pyvista_state")
+    except Exception:
+        _reset_pyvista_modules()
+        _sanitize_sys_path_for_pyvista()
+        try:
+            import pyvista as pv  # type: ignore # noqa: F401
+            if _is_bad_pyvista_module(pv):
+                _reset_pyvista_modules()
+        except Exception:
+            _reset_pyvista_modules()
+
+
 def _version_to_token(version_hint: Optional[str]) -> Optional[str]:
     if version_hint is None:
         return None
@@ -318,7 +380,31 @@ def _patch_pyaedt_process_discovery_no_powershell() -> None:
                     pid = int(info.get("pid") or getattr(proc, "pid", 0))
                 except Exception:
                     continue
-                out[pid] = _parse_grpc_port(cmdline)
+                parsed_port = _parse_grpc_port(cmdline)
+
+                listen_ports: set[int] = set()
+                try:
+                    for c in proc.net_connections(kind="tcp"):
+                        if str(getattr(c, "status", "")).upper() != "LISTEN":
+                            continue
+                        laddr = getattr(c, "laddr", None)
+                        pval = int(getattr(laddr, "port", 0) or 0)
+                        if pval > 0:
+                            listen_ports.add(pval)
+                except Exception:
+                    listen_ports = set()
+
+                # Ignore stale cmdline ports not currently bound by the process.
+                if parsed_port > 0 and parsed_port not in listen_ports:
+                    parsed_port = -1
+
+                # Fallback: infer a single non-reserved listener when cmdline is stale.
+                if parsed_port <= 0 and listen_ports:
+                    candidates = sorted([p for p in listen_ports if p not in (2001, 2002)])
+                    if len(candidates) == 1:
+                        parsed_port = int(candidates[0])
+
+                out[pid] = parsed_port
         except Exception:
             return {}
         return out
@@ -326,15 +412,15 @@ def _patch_pyaedt_process_discovery_no_powershell() -> None:
     def _safe_grpc_active_sessions(
         version: Optional[str] = None,
         student_version: bool = False,
-        non_graphical: Optional[bool] = False,
+        non_graphical: Optional[bool] = None,
     ) -> list[int]:
         data = _safe_active_sessions(version=version, student_version=student_version, non_graphical=non_graphical)
-        return [int(p) for p in data.values() if int(p) > -1]
+        return sorted({int(p) for p in data.values() if int(p) > -1})
 
     def _safe_com_active_sessions(
         version: Optional[str] = None,
         student_version: bool = False,
-        non_graphical: Optional[bool] = False,
+        non_graphical: Optional[bool] = None,
     ) -> list[int]:
         data = _safe_active_sessions(version=version, student_version=student_version, non_graphical=non_graphical)
         return [int(pid) for pid, port in data.items() if int(port) <= -1]
@@ -346,7 +432,8 @@ def _patch_pyaedt_process_discovery_no_powershell() -> None:
             return False
         if port_i <= 0:
             return False
-        return port_i in _safe_grpc_active_sessions()
+        # Check across both graphical and non-graphical AEDT sessions.
+        return port_i in _safe_grpc_active_sessions(non_graphical=None)
 
     try:
         gm._get_target_processes = _safe_get_target_processes
@@ -374,6 +461,7 @@ def _import_hfss(version_hint: Optional[str] = None):
     global _PSUTIL_BACKEND
     # Prefer the modern import path used by PyAEDT docs.
     _prepare_windows_dll_resolution(version_hint)
+    _ensure_pyvista_sane()
     # Some installed environments fail loading psutil native extension
     # (_psutil_windows). Provide a lightweight fallback shim so AEDT APIs
     # can still be imported and used.
@@ -403,6 +491,14 @@ def _import_hfss(version_hint: Optional[str] = None):
         from ansys.aedt.core import Hfss  # type: ignore
         return Hfss
     except Exception as e_modern:
+        msg_modern = str(e_modern)
+        if "partially initialized module 'pyvista'" in msg_modern or "module 'pyvista' has no attribute '_plot'" in msg_modern:
+            _ensure_pyvista_sane()
+            try:
+                from ansys.aedt.core import Hfss  # type: ignore
+                return Hfss
+            except Exception as e_retry:
+                e_modern = e_retry
         # Legacy fallback: only try when the compatibility package is present.
         # This prevents masking the real modern import error with
         # "No module named 'pyaedt'" when pyaedt is intentionally absent.
@@ -590,6 +686,217 @@ class AedtHfssSession:
         r_stem = Path(r).stem.lower()
         return c_stem == r_stem
 
+    @staticmethod
+    def _pick_attach_pid(student_version: bool, non_graphical: Optional[bool]) -> Optional[int]:
+        """Pick an existing AEDT process PID for attach mode."""
+        tgt = AedtHfssSession._pick_attach_target(student_version=student_version, non_graphical=non_graphical)
+        return None if tgt is None else int(tgt.get("pid") or 0) or None
+
+    @staticmethod
+    def _pick_attach_target(
+        student_version: bool,
+        non_graphical: Optional[bool],
+        allow_fallback: bool = True,
+    ) -> Optional[dict]:
+        """Pick best AEDT attach target and return {'pid','port','is_ng','ctime'}.
+
+        Selection policy:
+          1) Prefer sessions matching requested graphical mode.
+          2) Fallback to any session when strict match is unavailable.
+          3) Prefer valid listening gRPC ports and most recent process.
+        """
+        target_name = "ansysedtsv.exe" if bool(student_version) else "ansysedt.exe"
+        target_noext = target_name.replace(".exe", "")
+        ps_mod = None
+        try:
+            import psutil as _psutil  # type: ignore
+            ps_mod = _psutil
+        except Exception:
+            try:
+                ps_mod = create_psutil_shim_module()
+            except Exception:
+                return None
+        if ps_mod is None:
+            return None
+
+        candidates: list[dict] = []
+        try:
+            for proc in ps_mod.process_iter(attrs=["pid", "name", "cmdline", "create_time"]):
+                info = getattr(proc, "info", {}) or {}
+                name = str(info.get("name") or "").strip().lower()
+                if name not in (target_name, target_noext):
+                    continue
+                cmdline_raw = info.get("cmdline")
+                if isinstance(cmdline_raw, str):
+                    cmdline = [x for x in cmdline_raw.split() if x]
+                elif isinstance(cmdline_raw, (list, tuple)):
+                    cmdline = [str(x) for x in cmdline_raw if str(x)]
+                else:
+                    cmdline = []
+                args = [x.lower() for x in cmdline]
+                is_ng = "-ng" in args
+
+                try:
+                    pid = int(info.get("pid") or getattr(proc, "pid", 0))
+                except Exception:
+                    continue
+                if pid <= 0:
+                    continue
+                try:
+                    ctime = float(info.get("create_time") or getattr(proc, "create_time", lambda: 0.0)())
+                except Exception:
+                    ctime = 0.0
+                parsed_port = -1
+                if "-grpcsrv" in cmdline:
+                    try:
+                        raw = str(cmdline[cmdline.index("-grpcsrv") + 1]).strip()
+                        if raw.isdigit():
+                            parsed_port = int(raw)
+                        else:
+                            for part in reversed(raw.split(":")):
+                                part = str(part).strip()
+                                if part.isdigit():
+                                    parsed_port = int(part)
+                                    break
+                    except Exception:
+                        parsed_port = -1
+                listen_ports: set[int] = set()
+                try:
+                    for c in proc.net_connections(kind="tcp"):
+                        if str(getattr(c, "status", "")).upper() != "LISTEN":
+                            continue
+                        laddr = getattr(c, "laddr", None)
+                        pval = int(getattr(laddr, "port", 0) or 0)
+                        if pval > 0:
+                            listen_ports.add(pval)
+                except Exception:
+                    listen_ports = set()
+
+                if parsed_port > 0 and parsed_port not in listen_ports:
+                    parsed_port = -1
+                if parsed_port <= 0 and listen_ports:
+                    candidates_ports = sorted([p for p in listen_ports if p not in (2001, 2002)])
+                    if len(candidates_ports) == 1:
+                        parsed_port = int(candidates_ports[0])
+
+                candidates.append(
+                    {
+                        "pid": pid,
+                        "port": int(parsed_port) if int(parsed_port) > 0 else 0,
+                        "is_ng": bool(is_ng),
+                        "ctime": float(ctime),
+                    }
+                )
+        except Exception:
+            return None
+        if not candidates:
+            return None
+
+        def _pick(pool: list[dict]) -> Optional[dict]:
+            if not pool:
+                return None
+            ranked = sorted(
+                pool,
+                key=lambda x: (
+                    1 if int(x.get("port", 0)) > 0 else 0,
+                    float(x.get("ctime", 0.0)),
+                ),
+                reverse=True,
+            )
+            return ranked[0]
+
+        preferred: list[dict]
+        if non_graphical is True:
+            preferred = [c for c in candidates if bool(c.get("is_ng"))]
+        elif non_graphical is False:
+            preferred = [c for c in candidates if (not bool(c.get("is_ng")))]
+        else:
+            preferred = list(candidates)
+
+        picked = _pick(preferred)
+        if picked is None and allow_fallback:
+            picked = _pick(candidates)
+        return picked
+
+    @staticmethod
+    def _open_project_context(hfss_obj, project: Optional[str], design: Optional[str]) -> None:
+        """Open/activate the requested project and optional design explicitly."""
+        proj = AedtHfssSession._norm_project(project)
+        if not proj:
+            return
+        p = Path(proj)
+        proj_is_file = p.suffix.lower() == ".aedt"
+        proj_file = str(p) if proj_is_file else ""
+        proj_name = p.stem if proj_is_file else str(proj).strip()
+        last_error: Optional[Exception] = None
+
+        if proj_is_file and p.exists() and hasattr(hfss_obj, "load_project"):
+            try:
+                loaded = hfss_obj.load_project(proj_file, design=design, close_active=False, set_active=False)
+                if loaded:
+                    if design and hasattr(hfss_obj, "set_active_design"):
+                        try:
+                            hfss_obj.set_active_design(design)
+                        except Exception:
+                            pass
+                    return
+            except Exception as e_load:
+                last_error = e_load
+
+        desk = getattr(hfss_obj, "odesktop", None)
+        if desk is None:
+            desk_cls = getattr(hfss_obj, "desktop_class", None)
+            if desk_cls is not None:
+                desk = getattr(desk_cls, "odesktop", None)
+        if desk is None:
+            if last_error:
+                raise RuntimeError(f"Unable to access AEDT desktop object: {last_error}") from last_error
+            raise RuntimeError("Unable to access AEDT desktop object.")
+
+        if proj_is_file and p.exists() and hasattr(desk, "OpenProject"):
+            try:
+                desk.OpenProject(proj_file)
+            except Exception as e_open:
+                last_error = e_open
+
+        pobj = None
+        for token in [proj_file, proj_name, proj]:
+            token = str(token or "").strip()
+            if not token:
+                continue
+            try:
+                pobj = desk.SetActiveProject(token)
+                if pobj is not None:
+                    break
+            except Exception as e_set:
+                last_error = e_set
+                continue
+
+        if pobj is None:
+            if last_error:
+                raise RuntimeError(f"Unable to activate project '{proj}': {last_error}") from last_error
+            raise RuntimeError(f"Unable to activate project '{proj}'.")
+
+        if design:
+            try:
+                pobj.SetActiveDesign(design)
+            except Exception:
+                try:
+                    if hasattr(hfss_obj, "set_active_design"):
+                        hfss_obj.set_active_design(design)
+                except Exception:
+                    pass
+
+        active_project = AedtHfssSession._norm_project(
+            getattr(hfss_obj, "project_file", None)
+        ) or AedtHfssSession._norm_project(getattr(hfss_obj, "project_name", None))
+        # Some PyAEDT builds can leave project_file/project_name blank right
+        # after SetActiveProject/load_project. Only fail on explicit mismatch.
+        if active_project and (not AedtHfssSession._project_matches(active_project, proj)):
+            raise RuntimeError(
+                f"Project context mismatch. Requested='{proj}' Active='{active_project or ''}'"
+            )
+
     @property
     def hfss(self):
         if self._hfss is None:
@@ -663,6 +970,39 @@ class AedtHfssSession:
 
             # New desktop only on first connect when requested.
             new_desktop = bool(self.cfg.new_desktop and not self._ever_connected)
+            attach_pid = self.cfg.aedt_process_id
+            attach_port = int(self.cfg.port or 0)
+            call_non_graphical = bool(self.cfg.non_graphical)
+            if not new_desktop:
+                if attach_pid:
+                    picked = self._pick_attach_target(
+                        student_version=self.cfg.student_version,
+                        non_graphical=self.cfg.non_graphical,
+                        allow_fallback=True,
+                    )
+                    if picked and int(picked.get("pid", 0)) == int(attach_pid) and int(picked.get("port", 0)) > 0 and attach_port <= 0:
+                        attach_port = int(picked.get("port", 0))
+                else:
+                    picked = self._pick_attach_target(
+                        student_version=self.cfg.student_version,
+                        non_graphical=self.cfg.non_graphical,
+                        allow_fallback=False,
+                    )
+                    if picked is None:
+                        # No strict mode match available. Fall back to any running
+                        # AEDT session and align non_graphical with the chosen target.
+                        picked = self._pick_attach_target(
+                            student_version=self.cfg.student_version,
+                            non_graphical=None,
+                            allow_fallback=True,
+                        )
+                        if picked is not None:
+                            call_non_graphical = bool(picked.get("is_ng"))
+                    if picked:
+                        attach_pid = int(picked.get("pid", 0)) or None
+                        if attach_port <= 0:
+                            attach_port = int(picked.get("port", 0) or 0)
+            port_to_use = int(attach_port if (not new_desktop and attach_port > 0) else int(self.cfg.port or 0))
 
             def _open(version_value):
                 return Hfss(
@@ -670,59 +1010,104 @@ class AedtHfssSession:
                     design=design,
                     setup=setup,
                     version=version_value,
-                    non_graphical=self.cfg.non_graphical,
+                    non_graphical=call_non_graphical,
                     new_desktop=new_desktop,
                     close_on_exit=self.cfg.close_on_exit,
                     student_version=self.cfg.student_version,
                     machine=self.cfg.machine,
-                    port=self.cfg.port,
-                    aedt_process_id=self.cfg.aedt_process_id,
+                    port=port_to_use,
+                    aedt_process_id=attach_pid,
                     remove_lock=remove_lock,
                 )
 
+            def _open_no_project(version_value):
+                return Hfss(
+                    project=None,
+                    design=None,
+                    setup=setup,
+                    version=version_value,
+                    non_graphical=call_non_graphical,
+                    new_desktop=new_desktop,
+                    close_on_exit=self.cfg.close_on_exit,
+                    student_version=self.cfg.student_version,
+                    machine=self.cfg.machine,
+                    port=port_to_use,
+                    aedt_process_id=attach_pid,
+                    remove_lock=remove_lock,
+                )
+
+            opened_via_fallback = False
             try:
                 self._hfss = _open(self.cfg.version)
                 _patch_desktop_compat(self._hfss)
             except Exception as e_first:
-                self._hfss = None
                 msg_first = str(e_first)
-                if "PyDesktopPlugin.dll" not in msg_first:
+
+                if project and ("OpenProject" in msg_first or "project" in msg_first.lower()):
+                    try:
+                        self._hfss = _open_no_project(self.cfg.version)
+                        _patch_desktop_compat(self._hfss)
+                        self._open_project_context(self._hfss, project=project, design=design)
+                        opened_via_fallback = True
+                    except Exception:
+                        try:
+                            if self._hfss is not None:
+                                self._hfss.release_desktop(close_projects=False, close_desktop=False)
+                        except Exception:
+                            pass
+                        finally:
+                            self._hfss = None
+
+                if (not opened_via_fallback) and ("PyDesktopPlugin.dll" not in msg_first):
+                    try:
+                        if self._hfss is not None:
+                            self._hfss.release_desktop(close_projects=False, close_desktop=False)
+                    except Exception:
+                        pass
+                    finally:
+                        self._hfss = None
                     raise RuntimeError(
                         f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first} "
                         f"| psutil_backend={_PSUTIL_BACKEND}"
                     ) from e_first
 
-                # Retry with extra DLL bootstrap and auto-version fallback.
-                retry_errors: list[str] = []
-                try_versions = []
-                token = _version_to_token(self.cfg.version)
-                if token and token != str(self.cfg.version).strip():
-                    try_versions.append(token)
-                try_versions.append(None)
+                if not opened_via_fallback:
+                    retry_errors: list[str] = []
+                    try_versions = []
+                    if new_desktop:
+                        token = _version_to_token(self.cfg.version)
+                        if token and token != str(self.cfg.version).strip():
+                            try_versions.append(token)
+                        try_versions.append(None)
 
-                for v_try in try_versions:
-                    try:
-                        _prepare_windows_dll_resolution(self.cfg.version if v_try is None else str(v_try))
-                        self._hfss = _open(v_try)
-                        _patch_desktop_compat(self._hfss)
-                        break
-                    except Exception as e_retry:
-                        self._hfss = None
-                        retry_errors.append(f"version={v_try!r}: {e_retry}")
+                    for v_try in try_versions:
+                        try:
+                            _prepare_windows_dll_resolution(self.cfg.version if v_try is None else str(v_try))
+                            self._hfss = _open(v_try)
+                            _patch_desktop_compat(self._hfss)
+                            break
+                        except Exception as e_retry:
+                            self._hfss = None
+                            retry_errors.append(f"version={v_try!r}: {e_retry}")
 
-                if self._hfss is None:
-                    roots = [str(p) for p in _discover_aedt_roots(self.cfg.version)]
-                    help_msg = (
-                        "Falha ao carregar dependencias nativas do AEDT (PyDesktopPlugin.dll). "
-                        f"Versao solicitada: {self.cfg.version!r}. "
-                        f"Raizes AEDT detectadas: {roots or ['<nenhuma>']}."
-                    )
-                    if retry_errors:
-                        help_msg += " Retries: " + " | ".join(retry_errors)
-                    raise RuntimeError(
-                        f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first}. {help_msg} "
-                        f"| psutil_backend={_PSUTIL_BACKEND}"
-                    ) from e_first
+                    if self._hfss is None:
+                        roots = [str(p) for p in _discover_aedt_roots(self.cfg.version)]
+                        help_msg = (
+                            "Falha ao carregar dependencias nativas do AEDT (PyDesktopPlugin.dll). "
+                            f"Versao solicitada: {self.cfg.version!r}. "
+                            f"Raizes AEDT detectadas: {roots or ['<nenhuma>']}."
+                        )
+                        if retry_errors:
+                            help_msg += " Retries: " + " | ".join(retry_errors)
+                        elif not new_desktop:
+                            help_msg += (
+                                " Attach mode: retries were skipped intentionally "
+                                "to avoid opening multiple AEDT instances."
+                            )
+                        raise RuntimeError(
+                            f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first}. {help_msg} "
+                            f"| psutil_backend={_PSUTIL_BACKEND}"
+                        ) from e_first
 
             self._connected_at = time.time()
             self._last_project = project
