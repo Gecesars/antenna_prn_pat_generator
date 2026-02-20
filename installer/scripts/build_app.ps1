@@ -22,6 +22,24 @@ if ($Clean) {
   --clean `
   --onedir `
   --exclude-module "django" `
+  --exclude-module "flet" `
+  --exclude-module "flet_desktop" `
+  --hidden-import "ansys.aedt.core" `
+  --hidden-import "ansys.aedt.core.hfss" `
+  --hidden-import "ansys.aedt.core.desktop" `
+  --hidden-import "ansys.api.edb.v1" `
+  --hidden-import "psutil._psutil_windows" `
+  --collect-all "ansys.aedt.core" `
+  --collect-all "ansys.api.edb" `
+  --collect-all "ansys.edb.core" `
+  --collect-all "pyedb" `
+  --collect-all "pyvista" `
+  --collect-all "rfc3987_syntax" `
+  --collect-data "jsonschema_specifications" `
+  --collect-data "referencing" `
+  --collect-submodules "grpc" `
+  --collect-submodules "psutil" `
+  --collect-binaries "psutil" `
   --name "EFTX_DiagramSuite" `
   --icon ".\installer\wix\icon.ico" `
   --add-data "assets;assets" `

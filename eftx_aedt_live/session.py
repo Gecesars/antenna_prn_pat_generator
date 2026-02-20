@@ -10,6 +10,7 @@ from typing import Optional
 import os
 import re
 import platform
+import traceback
 
 import threading
 import time
@@ -487,35 +488,64 @@ def _import_hfss(version_hint: Optional[str] = None):
         except Exception:
             _PSUTIL_BACKEND = "import_failed(no_shim)"
     _patch_pyaedt_process_discovery_no_powershell()
-    try:
-        from ansys.aedt.core import Hfss  # type: ignore
-        return Hfss
-    except Exception as e_modern:
-        msg_modern = str(e_modern)
-        if "partially initialized module 'pyvista'" in msg_modern or "module 'pyvista' has no attribute '_plot'" in msg_modern:
-            _ensure_pyvista_sane()
+    modern_errors: list[str] = []
+
+    def _fmt_exc(exc: Exception) -> str:
+        msg = f"{type(exc).__name__}: {exc}"
+        fn = getattr(exc, "filename", None)
+        if fn:
+            msg += f" | file={fn}"
+        wn = getattr(exc, "winerror", None)
+        if wn is not None:
+            msg += f" | winerror={wn}"
+        return msg
+
+    def _try_modern_imports() -> Optional[type]:
+        # Prefer direct module import first. Importing from package root can
+        # pull optional visualization stack eagerly in frozen builds.
+        attempts = (
+            ("ansys.aedt.core.hfss", lambda: importlib.import_module("ansys.aedt.core.hfss").Hfss),
+            ("ansys.aedt.core", lambda: importlib.import_module("ansys.aedt.core").Hfss),
+        )
+        for label, loader in attempts:
             try:
-                from ansys.aedt.core import Hfss  # type: ignore
-                return Hfss
-            except Exception as e_retry:
-                e_modern = e_retry
-        # Legacy fallback: only try when the compatibility package is present.
-        # This prevents masking the real modern import error with
-        # "No module named 'pyaedt'" when pyaedt is intentionally absent.
-        try:
-            if importlib.util.find_spec("pyaedt") is None:
-                raise RuntimeError(
-                    f"Unable to import HFSS API. Modern import failed: {e_modern!r}. "
-                    "Legacy fallback package 'pyaedt' is not available."
-                ) from e_modern
-            from pyaedt import Hfss  # type: ignore
-            return Hfss
-        except Exception as e_legacy:
+                cls = loader()
+                return cls
+            except Exception as e_try:
+                modern_errors.append(f"{label}: {_fmt_exc(e_try)}")
+        return None
+
+    hfss_cls = _try_modern_imports()
+    if hfss_cls is not None:
+        return hfss_cls
+
+    # Retry once after pyvista sanitation when modern import hints at graphics shadowing.
+    combined = " | ".join(modern_errors).lower()
+    if ("pyvista" in combined) or ("_plot" in combined):
+        _ensure_pyvista_sane()
+        hfss_cls = _try_modern_imports()
+        if hfss_cls is not None:
+            return hfss_cls
+
+    # Legacy fallback: only try when the compatibility package is present.
+    # This prevents masking the real modern import error with
+    # "No module named 'pyaedt'" when pyaedt is intentionally absent.
+    try:
+        if importlib.util.find_spec("pyaedt") is None:
             raise RuntimeError(
-                f"Unable to import HFSS API. "
-                f"Modern import failed: {e_modern!r} | "
-                f"Legacy fallback failed: {e_legacy!r}"
-            ) from e_legacy
+                "Legacy fallback package 'pyaedt' is not available."
+            )
+        from pyaedt import Hfss  # type: ignore
+        return Hfss
+    except Exception as e_legacy:
+        detail = " | ".join(modern_errors[-6:]) if modern_errors else "no-modern-details"
+        tb = traceback.format_exc(limit=6).strip().replace("\n", " || ")
+        raise RuntimeError(
+            "Unable to import HFSS API. "
+            f"Modern import attempts: {detail} | "
+            f"Legacy fallback failed: {_fmt_exc(e_legacy)} | "
+            f"trace={tb}"
+        ) from e_legacy
 
 
 def _force_pyaedt_single_desktop_mode() -> None:
