@@ -50,6 +50,7 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kiwisolver==1.4.9
 lief==0.17.1
+llvmlite==0.46.0
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 matplotlib==3.10.6
@@ -57,6 +58,7 @@ mdurl==0.1.2
 msgpack==1.1.2
 nodeenv==1.10.0
 numpy==2.2.6
+numba==0.64.0
 oauthlib==3.3.1
 packaging==25.0
 pandas==2.3.3
@@ -68,6 +70,10 @@ pre_commit==4.5.1
 protobuf==6.33.5
 psutil==7.2.2
 pyaedt==0.25.0
+PySide6>=6.6
+pyvista==0.46.5
+pyvistaqt>=0.11
+vtk==9.5.2
 pycparser==3.0
 pydantic==2.12.5
 pydantic_core==2.41.5

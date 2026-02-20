@@ -36,8 +36,19 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from null_fill_synthesis import synth_null_fill_by_order, weights_to_harness
 from ui.tabs.tab_advanced_viz import AdvancedVisualizationTab
+from ui.tabs.tab_mechanical_analysis import MechanicalAnalysisTab
 from core.perf import PerfTracer
+from core.analysis.pattern_metrics import (
+    directivity_2d_cut as d2d_cut_numba_wrapper,
+    hpbw_cut_1d as hpbw_cut_numba_wrapper,
+    metrics_cut_1d as metrics_cut_numba_wrapper,
+    start_numba_warmup_thread,
+)
 from reports.pdf_report import export_report_pdf, ReportCancelled, ReportExportError
+try:
+    from adapters.image_pipeline_controller import ImagePipelineController
+except Exception:
+    ImagePipelineController = None  # type: ignore
 
 # CustomTkinter can emit transient TclError ("invalid command name") when a widget
 # is destroyed while a queued <Configure> event is still being processed.
@@ -460,22 +471,36 @@ def compute_diagram_metrics(kind: str, angles: np.ndarray, values: np.ndarray) -
     if vmax <= 1e-12:
         return {}
     vn = np.abs(v) / vmax
-    vdb = linear_to_db(vn)
-    idx_pk = int(np.argmax(vn))
-    peak_ang = float(a[idx_pk])
-    peak_db = float(vdb[idx_pk])
-    hpbw = hpbw_deg(a, vn)
-    span = 360.0 if k == "H" else 180.0
-    d2d = directivity_2d_cut(a, vn, span_deg=span)
-    d2d_db = 10.0 * math.log10(d2d) if math.isfinite(d2d) and d2d > 0 else float("nan")
-    first_null = _first_null_db(a, vn)
+    span_mode = 0 if k == "H" else 1
+    try:
+        metric_raw = metrics_cut_numba_wrapper(a, vn, span_mode=span_mode, xdb=3.0)
+    except Exception:
+        metric_raw = {}
+    if metric_raw:
+        peak_ang = float(metric_raw.get("peak_angle_deg", float("nan")))
+        peak_db = float(metric_raw.get("peak_db", float("nan")))
+        hpbw = float(metric_raw.get("hpbw_deg", float("nan")))
+        d2d = float(metric_raw.get("d2d_lin", float("nan")))
+        d2d_db = float(metric_raw.get("d2d_db", float("nan")))
+        first_null = float(metric_raw.get("first_null_db", float("nan")))
+        fb_db = float(metric_raw.get("fb_db", float("nan")))
+    else:
+        vdb = linear_to_db(vn)
+        idx_pk = int(np.argmax(vn))
+        peak_ang = float(a[idx_pk])
+        peak_db = float(vdb[idx_pk])
+        hpbw = hpbw_deg(a, vn)
+        span = 360.0 if k == "H" else 180.0
+        d2d = directivity_2d_cut(a, vn, span_deg=span)
+        d2d_db = 10.0 * math.log10(d2d) if math.isfinite(d2d) and d2d > 0 else float("nan")
+        first_null = _first_null_db(a, vn)
+        fb_db = float("nan")
+        if k == "H":
+            opp = ((peak_ang + 180.0 + 180.0) % 360.0) - 180.0
+            v_opp = float(np.interp(opp, a, vn, period=360.0))
+            if v_opp > 1e-12:
+                fb_db = float(20.0 * math.log10(max(vn[idx_pk], 1e-12) / v_opp))
     step_deg = _estimate_step_deg(a)
-    fb_db = float("nan")
-    if k == "H":
-        opp = ((peak_ang + 180.0 + 180.0) % 360.0) - 180.0
-        v_opp = float(np.interp(opp, a, vn, period=360.0))
-        if v_opp > 1e-12:
-            fb_db = float(20.0 * math.log10(max(vn[idx_pk], 1e-12) / v_opp))
 
     return {
         "kind": k,
@@ -1022,43 +1047,49 @@ def simpson(y: np.ndarray, dx: float) -> float:
 
 def hpbw_deg(angles_deg: np.ndarray, e_lin: np.ndarray) -> float:
     """HPBW pelo cruzamento em -3 dB: |E|=sqrt(0.5)."""
-    if len(angles_deg) < 3:
-        return float("nan")
-    e = e_lin / (np.max(e_lin) if np.max(e_lin) > 0 else 1.0)
-    thr = math.sqrt(0.5)
-    i0 = int(np.argmax(e))
-    aL = None; aR = None
-    # esquerda
-    for i in range(i0, 0, -1):
-        if e[i] >= thr and e[i-1] < thr:
-            a1, a2 = angles_deg[i-1], angles_deg[i]
-            y1, y2 = e[i-1], e[i]
-            aL = a1 + (thr - y1) * (a2 - a1) / (y2 - y1)
-            break
-    # direita
-    for i in range(i0, len(e)-1):
-        if e[i] >= thr and e[i+1] < thr:
-            a1, a2 = angles_deg[i], angles_deg[i+1]
-            y1, y2 = e[i], e[i+1]
-            aR = a1 + (thr - y1) * (a2 - a1) / (y2 - y1)
-            break
-    if aL is None or aR is None:
-        return float("nan")
-    return float(aR - aL)
+    try:
+        return float(hpbw_cut_numba_wrapper(angles_deg, e_lin, xdb=3.0))
+    except Exception:
+        if len(angles_deg) < 3:
+            return float("nan")
+        e = e_lin / (np.max(e_lin) if np.max(e_lin) > 0 else 1.0)
+        thr = math.sqrt(0.5)
+        i0 = int(np.argmax(e))
+        aL = None
+        aR = None
+        for i in range(i0, 0, -1):
+            if e[i] >= thr and e[i - 1] < thr:
+                a1, a2 = angles_deg[i - 1], angles_deg[i]
+                y1, y2 = e[i - 1], e[i]
+                aL = a1 + (thr - y1) * (a2 - a1) / (y2 - y1)
+                break
+        for i in range(i0, len(e) - 1):
+            if e[i] >= thr and e[i + 1] < thr:
+                a1, a2 = angles_deg[i], angles_deg[i + 1]
+                y1, y2 = e[i], e[i + 1]
+                aR = a1 + (thr - y1) * (a2 - a1) / (y2 - y1)
+                break
+        if aL is None or aR is None:
+            return float("nan")
+        return float(aR - aL)
 
 def directivity_2d_cut(angles_deg: np.ndarray, e_lin: np.ndarray, span_deg: float) -> float:
     """Diretividade 2D do corte: D₂D = span_rad / ∫ P dθ, com P = (E/Emax)² e θ em rad."""
-    e = e_lin / (np.max(e_lin) if np.max(e_lin) > 0 else 1.0)
-    p = e * e
-    ang_rad = np.deg2rad(angles_deg)
-    if len(ang_rad) < 2:
-        return float("nan")
-    dx = float(ang_rad[1] - ang_rad[0])
-    integral = simpson(p, dx)
-    span_rad = math.radians(span_deg)
-    if integral <= 0:
-        return float("nan")
-    return float(span_rad / integral)
+    try:
+        mode = 0 if float(span_deg) >= 270.0 else 1
+        return float(d2d_cut_numba_wrapper(angles_deg, e_lin, span_mode=mode))
+    except Exception:
+        e = e_lin / (np.max(e_lin) if np.max(e_lin) > 0 else 1.0)
+        p = e * e
+        ang_rad = np.deg2rad(angles_deg)
+        if len(ang_rad) < 2:
+            return float("nan")
+        dx = float(ang_rad[1] - ang_rad[0])
+        integral = simpson(p, dx)
+        span_rad = math.radians(span_deg)
+        if integral <= 0:
+            return float("nan")
+        return float(span_rad / integral)
 
 # ----------------------------- Validação de Entrada ----------------------------- #
 def validate_float(P):
@@ -2759,6 +2790,8 @@ class PATConverterApp(ctk.CTk):
         self.export_registry: List[dict] = []
         self.aedt_live_last_payload: Optional[dict] = None
         self.aedt_live_3d: Optional[dict] = None
+        self.aedt_live_cad_3d: Optional[dict] = None
+        self.aedt_live_cad_manifest: Optional[dict] = None
         
         # Estado da aba de estudo completo (suporte a polarizacao dupla)
         self.study_mode_var = tk.StringVar(value="simples")  # simples | duplo
@@ -2783,6 +2816,13 @@ class PATConverterApp(ctk.CTk):
         self._artifact_lock = threading.Lock()
         self._artifact_progress = {"current": 0, "total": 1, "label": "Pronto"}
         self.perf_tracer = PERF
+        self.image_pipeline_controller = None
+        if ImagePipelineController is not None:
+            try:
+                tensor_cache = os.path.join(APP_USER_DIR, "cache", "image_tensor")
+                self.image_pipeline_controller = ImagePipelineController(cache_root=tensor_cache)
+            except Exception:
+                LOGGER.exception("Falha ao inicializar ImagePipelineController.")
 
         # Tabview (abas principais)
         self.tabs = ctk.CTkTabview(self)
@@ -2794,6 +2834,7 @@ class PATConverterApp(ctk.CTk):
         self.tab_study = self.tabs.add("Estudo Completo")
         self.tab_proj = self.tabs.add("Dados do Projeto")
         self.tab_adv = self.tabs.add("Visualizacao Avancada")
+        self.tab_mech = self.tabs.add("Analise Mecanica")
         self.tab_diag = self.tabs.add("Diagramas (Batch)")
 
         self._build_tab_file()
@@ -2803,6 +2844,8 @@ class PATConverterApp(ctk.CTk):
         self._build_tab_project()
         self.advanced_tab_view = AdvancedVisualizationTab(self.tab_adv, app=self)
         self.advanced_tab_view.pack(fill="both", expand=True)
+        self.mechanical_tab_view = MechanicalAnalysisTab(self.tab_mech, app=self)
+        self.mechanical_tab_view.pack(fill="both", expand=True)
         
         # Build Diagram Tab with Callback
         self.task_cancel_event = threading.Event()
@@ -2865,6 +2908,7 @@ class PATConverterApp(ctk.CTk):
         self._bind_shortcuts()
         self._refresh_project_overview()
         self._try_recover_autosave()
+        self._start_numba_warmup()
         self.after(30_000, self._autosave_tick)
 
     def _build_header(self):
@@ -2931,6 +2975,7 @@ class PATConverterApp(ctk.CTk):
         m_tools.add_command(label="Export Wizard...", accelerator="Ctrl+Shift+E", command=self.open_export_wizard)
         m_tools.add_command(label="Validate PRN/PAT...", command=self.open_validator)
         m_tools.add_command(label="Advanced Visualization", accelerator="Ctrl+Shift+V", command=self.open_advanced_view)
+        m_tools.add_command(label="Mechanical Analysis", accelerator="Ctrl+Shift+M", command=self.open_mechanical_view)
         menubar.add_cascade(label="Tools", menu=m_tools)
 
         m_window = tk.Menu(menubar, tearoff=0)
@@ -2941,6 +2986,7 @@ class PATConverterApp(ctk.CTk):
         m_window.add_command(label="Go to Visualizacao Avancada", accelerator="Alt+5", command=lambda: self.tabs.set("Visualizacao Avancada"))
         m_window.add_command(label="Go to Diagramas", accelerator="Alt+6", command=lambda: self.tabs.set("Diagramas (Batch)"))
         m_window.add_command(label="Go to AEDT Live", accelerator="Alt+7", command=lambda: self._goto_tab("AEDT Live"))
+        m_window.add_command(label="Go to Analise Mecanica", accelerator="Alt+8", command=self.open_mechanical_view)
         menubar.add_cascade(label="Window", menu=m_window)
 
         m_help = tk.Menu(menubar, tearoff=0)
@@ -2963,6 +3009,7 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Control-Shift-E>", lambda e: self.open_export_wizard())
         self.bind_all("<Control-Shift-R>", lambda e: self.open_report_pdf_export())
         self.bind_all("<Control-Shift-V>", lambda e: self.open_advanced_view())
+        self.bind_all("<Control-Shift-M>", lambda e: self.open_mechanical_view())
         self.bind_all("<Control-p>", lambda e: self.export_all_prn())
         self.bind_all("<Control-l>", lambda e: self.open_log_window())
         self.bind_all("<Control-w>", lambda e: self.open_null_fill_wizard())
@@ -2977,6 +3024,7 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Alt-KeyPress-5>", lambda e: self.tabs.set("Visualizacao Avancada"))
         self.bind_all("<Alt-KeyPress-6>", lambda e: self.tabs.set("Diagramas (Batch)"))
         self.bind_all("<Alt-KeyPress-7>", lambda e: self._goto_tab("AEDT Live"))
+        self.bind_all("<Alt-KeyPress-8>", lambda e: self.open_mechanical_view())
         self.bind_all("<Button-3>", self._global_context_menu, add="+")
         self.bind_all("<Button-2>", self._global_context_menu, add="+")
 
@@ -3018,6 +3066,15 @@ class PATConverterApp(ctk.CTk):
     def _task_ui_is_cancelled(self) -> bool:
         return self.task_cancel_event.is_set()
 
+    def _start_numba_warmup(self):
+        try:
+            start_numba_warmup_thread(
+                logger=LOGGER,
+                status_cb=lambda msg: self.after(0, lambda: self._set_status(msg)),
+            )
+        except Exception:
+            LOGGER.exception("Falha ao iniciar warm-up Numba.")
+
     def _notify_advanced_data_changed(self):
         view = getattr(self, "advanced_tab_view", None)
         if view is None:
@@ -3035,6 +3092,13 @@ class PATConverterApp(ctk.CTk):
         except Exception:
             LOGGER.exception("Falha ao abrir visualizacao avancada.")
 
+    def open_mechanical_view(self):
+        try:
+            self.tabs.set("Analise Mecanica")
+            self._set_status("Analise mecanica aberta.")
+        except Exception:
+            LOGGER.exception("Falha ao abrir analise mecanica.")
+
     def _global_context_menu(self, event):
         try:
             widget = getattr(event, "widget", None)
@@ -3046,6 +3110,7 @@ class PATConverterApp(ctk.CTk):
                 return
             m = tk.Menu(self, tearoff=0)
             m.add_command(label="Visualizacao Avancada", command=self.open_advanced_view)
+            m.add_command(label="Analise Mecanica", command=self.open_mechanical_view)
             m.add_command(label="Ajuda / Workflow", command=self.show_help)
             m.add_command(label="Abrir Log", command=self.open_log_window)
             m.add_command(label="Preferencias", command=self.open_preferences)
@@ -3601,6 +3666,7 @@ class PATConverterApp(ctk.CTk):
                 )
                 plot_path = os.path.join(tmp_plot_root, f"{idx:02d}_{tag}.png")
                 fig.savefig(plot_path, dpi=dpi, bbox_inches="tight", pad_inches=0.08)
+                self._tensor_postprocess_png(plot_path, profile="pdf_quality", dpi=dpi)
                 try:
                     fig.clf()
                 except Exception:
@@ -3994,6 +4060,7 @@ class PATConverterApp(ctk.CTk):
                         )
                         path = os.path.join(out, f"{prefix}_{tag}_plot.png")
                         fig.savefig(path, dpi=300)
+                        self._tensor_postprocess_png(path, profile="beautify_datasheet", dpi=300)
                         exported.append({"kind": f"WIZARD_{tag.upper()}_PLOT", "path": path})
                     except Exception as e:
                         warnings.append(f"Grafico {tag}: {e}")
@@ -4018,6 +4085,7 @@ class PATConverterApp(ctk.CTk):
                         img = render_table_image(t_ang, linear_to_db(t_val), "dB", color, title)
                         path = os.path.join(out, f"{prefix}_{tag}_table.png")
                         img.save(path)
+                        self._tensor_postprocess_png(path, profile="beautify_datasheet", dpi=300)
                         exported.append({"kind": f"WIZARD_{tag.upper()}_TABLE", "path": path})
                     except Exception as e:
                         warnings.append(f"Tabela {tag}: {e}")
@@ -5220,8 +5288,10 @@ class PATConverterApp(ctk.CTk):
         exports_missing = exports_total - exports_ok
         aedt_payload = getattr(self, "aedt_live_last_payload", None)
         aedt_grid = getattr(self, "aedt_live_3d", None)
+        aedt_cad = getattr(self, "aedt_live_cad_manifest", None)
         aedt_has_2d = "sim" if isinstance(aedt_payload, dict) and isinstance(aedt_payload.get("cuts_2d"), dict) and bool(aedt_payload.get("cuts_2d")) else "nao"
         aedt_has_3d = "sim" if isinstance(aedt_grid, dict) else "nao"
+        aedt_has_cad = "sim" if isinstance(aedt_cad, dict) and isinstance(aedt_cad.get("files"), list) and bool(aedt_cad.get("files")) else "nao"
 
         lines = [
             "=== DADOS DO PROJETO ===",
@@ -5232,6 +5302,7 @@ class PATConverterApp(ctk.CTk):
             f"Pasta de saida: {self.output_dir or '(nao definida)'}",
             f"AEDT 2D no projeto: {aedt_has_2d}",
             f"AEDT 3D no projeto: {aedt_has_3d}",
+            f"AEDT CAD no projeto: {aedt_has_cad}",
             "",
             "Entradas (Aba Arquivo):",
             f"VRP: {size_info('v_angles')}",
@@ -5289,6 +5360,33 @@ class PATConverterApp(ctk.CTk):
         self.export_registry.append(rec)
         self._refresh_project_overview()
 
+    def _tensor_postprocess_png(self, path: str, profile: str = "pdf_quality", dpi: int = 300) -> bool:
+        ctrl = getattr(self, "image_pipeline_controller", None)
+        src = os.path.abspath(str(path or ""))
+        if ctrl is None or (not src) or (not os.path.isfile(src)):
+            return False
+        tmp = src + ".tensor_tmp.png"
+        try:
+            ctrl.process_png(
+                input_path=src,
+                output_path=tmp,
+                profile=str(profile or "pdf_quality"),
+                device="auto",
+                use_cache=True,
+                dpi=int(max(72, int(dpi))),
+                metadata={"pipeline_profile": str(profile or "pdf_quality")},
+            )
+            os.replace(tmp, src)
+            return True
+        except Exception:
+            LOGGER.exception("Falha no post-processamento tensor: %s", src)
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            return False
+
     def _collect_project_state(self) -> dict:
         string_vars = {}
         for key, value in self.__dict__.items():
@@ -5320,6 +5418,7 @@ class PATConverterApp(ctk.CTk):
             "export_registry": list(self.export_registry),
             "aedt_live_last_payload": self.aedt_live_last_payload if isinstance(self.aedt_live_last_payload, dict) else None,
             "aedt_live_3d": self.aedt_live_3d if isinstance(self.aedt_live_3d, dict) else None,
+            "aedt_live_cad_manifest": self.aedt_live_cad_manifest if isinstance(self.aedt_live_cad_manifest, dict) else None,
         }
 
     def _apply_project_state(self, state: dict):
@@ -5384,6 +5483,9 @@ class PATConverterApp(ctk.CTk):
         self.aedt_live_last_payload = aedt_payload if isinstance(aedt_payload, dict) else None
         aedt_grid = state.get("aedt_live_3d")
         self.aedt_live_3d = aedt_grid if isinstance(aedt_grid, dict) else None
+        aedt_cad_manifest = state.get("aedt_live_cad_manifest")
+        self.aedt_live_cad_manifest = aedt_cad_manifest if isinstance(aedt_cad_manifest, dict) else None
+        self.aedt_live_cad_3d = None
 
         if self.v_angles is not None and self.v_vals is not None:
             self._plot_vertical_file(self.v_angles, self.v_vals)

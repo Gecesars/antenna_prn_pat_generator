@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import math
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
@@ -18,10 +19,11 @@ from core.math_engine import (
     save_user_functions,
 )
 from core.metrics_advanced import summarize_advanced_metrics
+from core.obj_parser import parse_obj_file
 from core.perf import DEFAULT_TRACER, PerfTracer
 from core.reconstruct3d import cut_from_arrays, reconstruct_spherical
 from ui.interactions.plot_interactor import AdvancedPlotInteractor
-from ui.viewers.viewer3d_pyvista import export_obj, export_plotly_html, open_3d_view
+from ui.viewers.viewer3d_pyvista import export_obj, export_plotly_html, open_3d_view, open_meshes_view
 from ui.widgets.derived_table import DerivedTable
 from ui.widgets.marker_table import MarkerTable
 from ui.widgets.plot_panel import PlotPanel
@@ -40,6 +42,8 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         self.current_values: Optional[np.ndarray] = None
         self.functions: List[MathFunctionDef] = load_user_functions()
         self.last_spherical = None
+        self.cad_status_var = tk.StringVar(value="CAD: nenhum importado")
+        self._cad_runtime_cache = None
 
         self.cut_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Ready")
@@ -189,6 +193,17 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         self.recon_progress.stop()
         ctk.CTkLabel(r7, textvariable=self.recon_status_var).pack(side="left")
 
+        cad = ctk.CTkFrame(right)
+        cad.pack(fill="x", padx=4, pady=6)
+        ctk.CTkLabel(cad, text="CAD Importado (AEDT)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=6, pady=(4, 2))
+        ctk.CTkLabel(cad, textvariable=self.cad_status_var, anchor="w", justify="left").pack(fill="x", padx=6, pady=(0, 4))
+        cbtn = ctk.CTkFrame(cad, fg_color="transparent")
+        cbtn.pack(fill="x", padx=6, pady=(0, 6))
+        self.btn_open_cad = ctk.CTkButton(cbtn, text="Open CAD 3D", width=110, command=self.open_cad_viewer)
+        self.btn_open_cad.pack(side="left", padx=(0, 4))
+        self.btn_reload_cad = ctk.CTkButton(cbtn, text="Reparse CAD", width=110, command=self.reload_cad_from_manifest)
+        self.btn_reload_cad.pack(side="left", padx=4)
+
         ctk.CTkLabel(self, textvariable=self.status_var).pack(fill="x", padx=8, pady=(0, 6))
 
         self.interactor: Optional[AdvancedPlotInteractor] = None
@@ -281,7 +296,167 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         if self.recon_h_source_var.get() not in h_keys:
             self.recon_h_source_var.set(h_keys[0])
 
+        self._refresh_cad_status()
         self.load_selected_cut()
+
+    def _refresh_cad_status(self):
+        runtime = getattr(self.app, "aedt_live_cad_3d", None)
+        manifest = getattr(self.app, "aedt_live_cad_manifest", None)
+        mesh_count = 0
+        file_count = 0
+        src = "-"
+        if isinstance(runtime, dict):
+            meshes = runtime.get("meshes", [])
+            files = runtime.get("files", [])
+            if isinstance(meshes, list):
+                mesh_count = len(meshes)
+            if isinstance(files, list):
+                file_count = len(files)
+            src = str(runtime.get("source", "-"))
+        elif isinstance(manifest, dict):
+            stats = manifest.get("stats", {})
+            mesh_count = int(stats.get("mesh_count", 0)) if isinstance(stats, dict) else 0
+            file_count = int(stats.get("file_count", 0)) if isinstance(stats, dict) else 0
+            src = str(manifest.get("source", "-"))
+        if mesh_count > 0:
+            self.cad_status_var.set(f"CAD disponível: {mesh_count} malha(s) em {file_count} arquivo(s) | Fonte: {src}")
+            if getattr(self, "btn_open_cad", None) is not None:
+                self.btn_open_cad.configure(state="normal")
+            if getattr(self, "btn_reload_cad", None) is not None:
+                self.btn_reload_cad.configure(state="normal")
+        else:
+            self.cad_status_var.set("CAD: nenhum importado.")
+            if getattr(self, "btn_open_cad", None) is not None:
+                self.btn_open_cad.configure(state="disabled")
+            if getattr(self, "btn_reload_cad", None) is not None:
+                self.btn_reload_cad.configure(state="disabled")
+
+    def _build_cad_runtime_from_manifest(self, manifest: dict) -> Optional[dict]:
+        if not isinstance(manifest, dict):
+            return None
+        files = manifest.get("files", [])
+        if not isinstance(files, list) or not files:
+            return None
+        style_map: Dict[tuple, dict] = {}
+        for item in manifest.get("meshes", []) if isinstance(manifest.get("meshes", []), list) else []:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                os.path.abspath(str(item.get("source_path", "") or "")),
+                str(item.get("object_name", "") or ""),
+                str(item.get("group_name", "") or ""),
+                str(item.get("obj_material", "") or ""),
+            )
+            style_map[key] = item
+
+        runtime_meshes: List[dict] = []
+        runtime_files: List[dict] = []
+        errors: List[str] = []
+
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            p = os.path.abspath(str(entry.get("path", "") or ""))
+            if not p or not os.path.isfile(p):
+                errors.append(f"Arquivo ausente: {p}")
+                continue
+            try:
+                model = parse_obj_file(p)
+            except Exception as e:
+                errors.append(f"Falha parser OBJ ({os.path.basename(p)}): {e}")
+                continue
+            summary = model.summary()
+            expected_sha = str(entry.get("sha256", "") or "")
+            got_sha = str(summary.get("sha256", "") or "")
+            if expected_sha and got_sha and expected_sha != got_sha:
+                errors.append(f"Hash divergente: {os.path.basename(p)}")
+            runtime_files.append(summary)
+            for chunk in model.mesh_chunks(split_mode="object_group_material"):
+                verts = np.asarray(chunk.get("vertices", np.zeros((0, 3), dtype=float)), dtype=float)
+                faces = np.asarray(chunk.get("faces", np.zeros((0, 3), dtype=int)), dtype=int)
+                if verts.size == 0 or faces.size == 0:
+                    continue
+                key = (
+                    p,
+                    str(chunk.get("object_name", "") or ""),
+                    str(chunk.get("group_name", "") or ""),
+                    str(chunk.get("material", "") or ""),
+                )
+                style = style_map.get(key, {})
+                runtime_meshes.append(
+                    {
+                        "name": str(chunk.get("name", "") or os.path.splitext(os.path.basename(p))[0]),
+                        "source_path": p,
+                        "vertices": verts,
+                        "faces": faces,
+                        "color": str(style.get("color", "#86b6f6")),
+                        "opacity": float(style.get("opacity", 0.85)),
+                        "material": str(chunk.get("material", "") or "Undefined"),
+                        "object_name": str(chunk.get("object_name", "") or ""),
+                        "group_name": str(chunk.get("group_name", "") or ""),
+                        "obj_material": str(chunk.get("material", "") or ""),
+                    }
+                )
+        if not runtime_meshes:
+            return None
+        return {
+            "version": int(manifest.get("version", 1) or 1),
+            "source": str(manifest.get("source", "AEDT") or "AEDT"),
+            "imported_at": str(manifest.get("imported_at", "") or ""),
+            "files": runtime_files,
+            "meshes": runtime_meshes,
+            "stats": {
+                "file_count": int(len(runtime_files)),
+                "mesh_count": int(len(runtime_meshes)),
+                "vertex_count": int(sum(int(np.asarray(x["vertices"]).shape[0]) for x in runtime_meshes)),
+                "face_count": int(sum(int(np.asarray(x["faces"]).shape[0]) for x in runtime_meshes)),
+            },
+            "errors": errors,
+        }
+
+    def _resolve_cad_runtime(self, force_reparse: bool = False) -> Optional[dict]:
+        runtime = getattr(self.app, "aedt_live_cad_3d", None)
+        if isinstance(runtime, dict) and isinstance(runtime.get("meshes"), list) and runtime.get("meshes") and not force_reparse:
+            self._cad_runtime_cache = runtime
+            return runtime
+        manifest = getattr(self.app, "aedt_live_cad_manifest", None)
+        rebuilt = self._build_cad_runtime_from_manifest(manifest if isinstance(manifest, dict) else {})
+        if isinstance(rebuilt, dict):
+            self._cad_runtime_cache = rebuilt
+            try:
+                setattr(self.app, "aedt_live_cad_3d", rebuilt)
+            except Exception:
+                pass
+            return rebuilt
+        return None
+
+    def reload_cad_from_manifest(self):
+        rebuilt = self._resolve_cad_runtime(force_reparse=True)
+        if rebuilt is None:
+            messagebox.showwarning("CAD", "Nao foi possivel reconstruir o CAD a partir do manifesto.")
+            self._refresh_cad_status()
+            return
+        errors = rebuilt.get("errors", [])
+        if isinstance(errors, list) and errors:
+            self._set_status(f"CAD reparse com avisos: {errors[0]}")
+        else:
+            self._set_status("CAD reparse concluido.")
+        self._refresh_cad_status()
+
+    def open_cad_viewer(self):
+        payload = self._resolve_cad_runtime(force_reparse=False)
+        if payload is None:
+            messagebox.showwarning("CAD 3D", "Nenhum CAD importado disponivel. Use a aba Analise Mecanica.")
+            return
+        meshes = payload.get("meshes", [])
+        if not isinstance(meshes, list) or not meshes:
+            messagebox.showwarning("CAD 3D", "Payload CAD sem malhas validas.")
+            return
+        try:
+            backend = open_meshes_view(meshes, title="EFTX CAD 3D Viewer")
+            self._set_status(f"CAD 3D viewer aberto ({backend}).")
+        except Exception as e:
+            messagebox.showerror("CAD 3D", str(e))
     def load_selected_cut(self):
         key = self.cut_var.get().strip()
         if not key or key not in self.source_map:

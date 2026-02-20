@@ -4,7 +4,7 @@ import math
 import os
 import tempfile
 import webbrowser
-from typing import Callable, Iterable, Optional, Tuple
+from typing import Callable, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -213,6 +213,130 @@ def open_3d_view(
         raise RuntimeError(
             "No 3D backend available. Install pyvista or plotly for interactive 3D view."
         ) from e
+
+
+def open_meshes_view(meshes: Sequence[dict], title: str = "EFTX CAD Viewer") -> str:
+    """
+    Open interactive viewer for CAD meshes.
+
+    Each mesh dict must contain:
+      - vertices: Nx3 array-like
+      - faces: Mx3 array-like (triangle indices)
+    Optional keys:
+      - color: '#RRGGBB'
+      - opacity: float in [0, 1]
+      - name: label
+    """
+    valid_meshes = []
+    for item in meshes or []:
+        try:
+            v = np.asarray(item.get("vertices"), dtype=float)
+            f = np.asarray(item.get("faces"), dtype=int)
+            if v.ndim != 2 or v.shape[1] != 3:
+                continue
+            if f.ndim != 2 or f.shape[1] != 3:
+                continue
+            if v.shape[0] == 0 or f.shape[0] == 0:
+                continue
+            valid_meshes.append(
+                {
+                    "vertices": v,
+                    "faces": f,
+                    "color": str(item.get("color", "#86b6f6")),
+                    "opacity": float(item.get("opacity", 0.85)),
+                    "name": str(item.get("name", "Mesh")),
+                }
+            )
+        except Exception:
+            continue
+    if not valid_meshes:
+        raise ValueError("No valid mesh to display.")
+
+    try:
+        import pyvista as pv  # type: ignore
+
+        p = pv.Plotter(title=title)
+        for mesh in valid_meshes:
+            verts = np.asarray(mesh["vertices"], dtype=float)
+            faces = np.asarray(mesh["faces"], dtype=np.int64)
+            cells = np.hstack([np.full((faces.shape[0], 1), 3, dtype=np.int64), faces]).reshape(-1)
+            poly = pv.PolyData(verts, cells)
+            p.add_mesh(
+                poly,
+                color=mesh["color"],
+                opacity=float(max(0.05, min(1.0, mesh["opacity"]))),
+                show_edges=False,
+                smooth_shading=True,
+                name=mesh["name"],
+            )
+        p.add_axes()
+        p.show_grid()
+        p.show()
+        return "pyvista"
+    except Exception:
+        pass
+
+    try:
+        import tkinter as tk
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+        from matplotlib.figure import Figure
+
+        root = tk._default_root
+        if root is None:
+            root = tk.Tk()
+            root.withdraw()
+        top = tk.Toplevel(root)
+        top.title(title)
+        top.geometry("980x720")
+
+        fig = Figure(figsize=(9.0, 6.5), dpi=100)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.set_title(title)
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+
+        all_points = []
+        for mesh in valid_meshes:
+            verts = np.asarray(mesh["vertices"], dtype=float)
+            faces = np.asarray(mesh["faces"], dtype=int)
+            ax.plot_trisurf(
+                verts[:, 0],
+                verts[:, 1],
+                verts[:, 2],
+                triangles=faces,
+                color=mesh["color"],
+                alpha=float(max(0.05, min(1.0, mesh["opacity"]))),
+                linewidth=0.15,
+                edgecolor="#1a1a1a",
+                antialiased=True,
+                shade=False,
+            )
+            all_points.append(verts)
+
+        if all_points:
+            pts = np.vstack(all_points)
+            lo = np.min(pts, axis=0)
+            hi = np.max(pts, axis=0)
+            center = 0.5 * (lo + hi)
+            span = float(np.max(np.maximum(hi - lo, 1e-9)))
+            half = 0.55 * span
+            ax.set_xlim(center[0] - half, center[0] + half)
+            ax.set_ylim(center[1] - half, center[1] + half)
+            ax.set_zlim(center[2] - half, center[2] + half)
+            try:
+                ax.set_box_aspect((1.0, 1.0, 1.0))
+            except Exception:
+                pass
+
+        canvas = FigureCanvasTkAgg(fig, master=top)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        toolbar = NavigationToolbar2Tk(canvas, top)
+        toolbar.update()
+        canvas.draw_idle()
+        return "tk-mpl3d"
+    except Exception as e:
+        raise RuntimeError("No CAD 3D backend available for mesh rendering.") from e
 
 
 def export_obj(pattern: SphericalPattern, path: str, gamma: float = 1.0, r0: float = 0.08, scale: float = 1.0):
