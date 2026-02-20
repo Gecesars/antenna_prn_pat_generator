@@ -34,6 +34,13 @@ if ($Clean) {
 }
 New-Item -ItemType Directory -Force ".\out" | Out-Null
 
+# Force WiX to use a local writable temp directory.
+$wixTmp = (Resolve-Path ".\out").Path
+$wixTmpDir = Join-Path $wixTmp "wix_tmp"
+New-Item -ItemType Directory -Force $wixTmpDir | Out-Null
+$env:TEMP = $wixTmpDir
+$env:TMP = $wixTmpDir
+
 if (-not $SkipBuildApp) {
     & ".\installer\scripts\build_app.ps1" -Clean:$Clean
 }

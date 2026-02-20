@@ -39,6 +39,46 @@ from ui.tabs.tab_advanced_viz import AdvancedVisualizationTab
 from core.perf import PerfTracer
 from reports.pdf_report import export_report_pdf, ReportCancelled, ReportExportError
 
+# CustomTkinter can emit transient TclError ("invalid command name") when a widget
+# is destroyed while a queued <Configure> event is still being processed.
+# Patch the dimension-update callback to ignore stale-widget races.
+def _patch_customtkinter_destroy_race() -> None:
+    try:
+        from customtkinter.windows.widgets.core_widget_classes import ctk_base_class  # type: ignore
+    except Exception:
+        return
+    base = getattr(ctk_base_class, "CTkBaseClass", None)
+    if base is None:
+        return
+    if getattr(base, "_eftx_destroy_race_patch", False):
+        return
+    orig = getattr(base, "_update_dimensions_event", None)
+    if orig is None or (not callable(orig)):
+        return
+
+    def _safe_update_dimensions_event(self, event=None):
+        try:
+            if hasattr(self, "winfo_exists") and (not bool(self.winfo_exists())):
+                return
+            canvas = getattr(self, "_canvas", None)
+            if canvas is not None:
+                try:
+                    if hasattr(canvas, "winfo_exists") and (not bool(canvas.winfo_exists())):
+                        return
+                except Exception:
+                    return
+            return orig(self, event)
+        except tk.TclError as e:
+            if "invalid command name" in str(e):
+                return
+            raise
+
+    setattr(base, "_update_dimensions_event", _safe_update_dimensions_event)
+    setattr(base, "_eftx_destroy_race_patch", True)
+
+
+_patch_customtkinter_destroy_race()
+
 # Ensure root/plugins are importable for drop-in integrations.
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.join(ROOT_DIR, "plugins")
@@ -54,6 +94,11 @@ except Exception:
         from aedt_live_plugin import register_aedt_live_tab
     except Exception:
         register_aedt_live_tab = None
+
+try:
+    from divisor import register_divisor_tab
+except Exception:
+    register_divisor_tab = None
 
 # ----------------------------- Constantes ----------------------------- #
 C0 = 299_792_458.0  # m/s
@@ -2786,6 +2831,18 @@ class PATConverterApp(ctk.CTk):
                 )
             except Exception:
                 LOGGER.exception("Falha ao registrar aba AEDT Live.")
+
+        # Optional module tab: Divisor (isolated in divisor.py)
+        self.divisor_tab = None
+        if callable(register_divisor_tab):
+            try:
+                self.divisor_tab = register_divisor_tab(
+                    app=self,
+                    tabview=self.tabs,
+                    tab_name="Divisor",
+                )
+            except Exception:
+                LOGGER.exception("Falha ao registrar aba Divisor.")
 
         # Status + progress
         self.status_bar = ctk.CTkFrame(self, fg_color="transparent")

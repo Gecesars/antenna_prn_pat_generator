@@ -37,3 +37,12 @@ ENV/
 # *.pat
 # *.prn
 # *.csv
+
+# Local runtime/build artifacts
+.eftx_converter/
+.matplotlib/
+*.spec
+*.wixpdb
+*.log
+out/wix_tmp/
+out/*.msi

@@ -21,6 +21,7 @@ if ($Clean) {
   --noconfirm `
   --clean `
   --onedir `
+  --exclude-module "django" `
   --name "EFTX_DiagramSuite" `
   --icon ".\installer\wix\icon.ico" `
   --add-data "assets;assets" `
@@ -39,4 +40,3 @@ if ($Clean) {
 
 Write-Host ""
 Write-Host "Build PyInstaller concluido em dist\EFTX_DiagramSuite"
-
