@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import datetime
 import importlib.util
+import json
 import math
 import os
 import subprocess
@@ -303,6 +304,12 @@ class MechanicalAnalysisTab(ctk.CTkFrame):
         self.export_dir_var = tk.StringVar(value=default_out)
         self.status_var = tk.StringVar(value="Analise mecanica pronta.")
         self.push_material_aedt_var = tk.BooleanVar(value=True)
+        appearance = "Dark"
+        try:
+            appearance = str(ctk.get_appearance_mode() or "Dark")
+        except Exception:
+            appearance = "Dark"
+        self.appearance_var = tk.StringVar(value=appearance)
 
         self.t_var = {k: tk.StringVar(value="0.0") for k in ("tx", "ty", "tz", "rx", "ry", "rz")}
         self.t_var["scale"] = tk.StringVar(value="1.0")
@@ -331,7 +338,7 @@ class MechanicalAnalysisTab(ctk.CTkFrame):
 
         top = ctk.CTkFrame(self)
         top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
-        for col in range(12):
+        for col in range(15):
             top.grid_columnconfigure(col, weight=0)
         top.grid_columnconfigure(6, weight=1)
 
@@ -352,8 +359,18 @@ class MechanicalAnalysisTab(ctk.CTkFrame):
         ctk.CTkButton(top, text="Modeler Pro (PySide6)", width=170, command=self._open_pyside6_modeler).grid(
             row=0, column=9, padx=4, pady=8
         )
+        ctk.CTkButton(top, text="Salvar Cena", width=110, command=self._save_scene_json).grid(row=0, column=10, padx=4, pady=8)
+        ctk.CTkButton(top, text="Carregar Cena", width=118, command=self._load_scene_json).grid(row=0, column=11, padx=4, pady=8)
+        ctk.CTkLabel(top, text="Tema").grid(row=0, column=12, padx=(6, 2), pady=8, sticky="e")
+        ctk.CTkOptionMenu(
+            top,
+            variable=self.appearance_var,
+            values=["Dark", "Light", "System"],
+            width=100,
+            command=self._apply_theme,
+        ).grid(row=0, column=13, padx=2, pady=8)
         ctk.CTkLabel(top, text="Mouse: rotate/pan/zoom via toolbar", anchor="w").grid(
-            row=0, column=10, columnspan=2, padx=(10, 8), pady=8, sticky="w"
+            row=0, column=14, padx=(10, 8), pady=8, sticky="w"
         )
 
         body = ctk.CTkFrame(self)
@@ -906,6 +923,136 @@ class MechanicalAnalysisTab(ctk.CTkFrame):
             self._set_status(f"Snapshot salvo: {path}")
         except Exception as e:
             messagebox.showerror("Erro snapshot", str(e))
+
+    def _apply_theme(self, value: str):
+        mode = str(value or "Dark").strip().capitalize()
+        if mode not in ("Dark", "Light", "System"):
+            mode = "Dark"
+        try:
+            ctk.set_appearance_mode(mode)
+            self.appearance_var.set(mode)
+            self._set_status(f"Tema aplicado: {mode}")
+            self.canvas.draw_idle()
+        except Exception as e:
+            messagebox.showerror("Theme", str(e))
+
+    def _scene_payload(self) -> dict:
+        materials: List[dict] = []
+        for iid in self.mat_tree.get_children():
+            vals = self.mat_tree.item(iid, "values")
+            if not vals:
+                continue
+            row = {k: str(v) for (k, _), v in zip(MATERIAL_COLUMNS, vals)}
+            materials.append(row)
+
+        objects: List[dict] = []
+        for name, obj in self.objects.items():
+            objects.append(
+                {
+                    "name": str(name),
+                    "vertices": np.asarray(obj.vertices, dtype=float).tolist(),
+                    "faces": np.asarray(obj.faces, dtype=int).tolist(),
+                    "color": str(obj.color),
+                    "opacity": float(obj.opacity),
+                    "material": str(obj.material),
+                    "source": str(obj.source),
+                    "visible": bool(obj.visible),
+                    "aedt_name": str(obj.aedt_name),
+                    "source_path": str(obj.source_path),
+                    "obj_object": str(obj.obj_object),
+                    "obj_group": str(obj.obj_group),
+                    "obj_material": str(obj.obj_material),
+                    "obj_smoothing": str(obj.obj_smoothing),
+                    "corner_indices": list(obj.corner_indices or []),
+                    "parser_warnings": list(obj.parser_warnings or []),
+                }
+            )
+        return {
+            "format_version": 1,
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "appearance": str(self.appearance_var.get() or "Dark"),
+            "selected_object": str(self.selected_object or ""),
+            "objects": objects,
+            "materials": materials,
+        }
+
+    def _save_scene_json(self):
+        path = filedialog.asksaveasfilename(
+            title="Salvar cena 3D",
+            defaultextension=".mechscene.json",
+            initialfile=f"scene_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mechscene.json",
+            filetypes=[("Mechanical scene", "*.mechscene.json"), ("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            payload = self._scene_payload()
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self._set_status(f"Cena salva: {path}")
+        except Exception as e:
+            messagebox.showerror("Salvar cena", str(e))
+
+    def _load_scene_json(self):
+        path = filedialog.askopenfilename(
+            title="Carregar cena 3D",
+            filetypes=[("Mechanical scene", "*.mechscene.json"), ("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                payload = json.load(f)
+            if not isinstance(payload, dict):
+                raise ValueError("Formato de cena invalido.")
+
+            loaded: Dict[str, MechanicalObject] = {}
+            for item in payload.get("objects", []):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    continue
+                v = np.asarray(item.get("vertices", []), dtype=float)
+                fcs = np.asarray(item.get("faces", []), dtype=int)
+                if v.ndim != 2 or v.shape[1] != 3 or fcs.ndim != 2 or fcs.shape[1] != 3:
+                    continue
+                loaded[name] = MechanicalObject(
+                    name=name,
+                    vertices=v,
+                    faces=fcs,
+                    color=str(item.get("color", "#86b6f6")),
+                    opacity=float(item.get("opacity", 0.85)),
+                    material=str(item.get("material", "Undefined")),
+                    source=str(item.get("source", "Scene")),
+                    visible=bool(item.get("visible", True)),
+                    aedt_name=str(item.get("aedt_name", "")),
+                    source_path=str(item.get("source_path", "")),
+                    obj_object=str(item.get("obj_object", "")),
+                    obj_group=str(item.get("obj_group", "")),
+                    obj_material=str(item.get("obj_material", "")),
+                    obj_smoothing=str(item.get("obj_smoothing", "")),
+                    corner_indices=item.get("corner_indices"),
+                    parser_warnings=item.get("parser_warnings"),
+                )
+            self.objects = loaded
+
+            mats = payload.get("materials", [])
+            if isinstance(mats, list) and mats:
+                for iid in self.mat_tree.get_children():
+                    self.mat_tree.delete(iid)
+                for row in mats:
+                    if isinstance(row, dict):
+                        self._insert_material_row(row)
+
+            self.selected_object = str(payload.get("selected_object", ""))
+            self._clear_cad_payload()
+            self._refresh_object_tree()
+            self._redraw_scene()
+            self._apply_theme(str(payload.get("appearance", self.appearance_var.get())))
+            self._set_status(f"Cena carregada: {path}")
+        except Exception as e:
+            messagebox.showerror("Carregar cena", str(e))
 
     def _clear_scene(self):
         if not self.objects:

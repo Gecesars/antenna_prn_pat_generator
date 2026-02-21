@@ -1,5 +1,8 @@
 ﻿from __future__ import annotations
 
+import csv
+import datetime
+import json
 import math
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -36,6 +39,7 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         self.tracer: PerfTracer = getattr(app, "perf_tracer", DEFAULT_TRACER)
 
         self.source_map: Dict[str, dict] = {}
+        self.user_sources: Dict[str, dict] = {}
         self.current_key: Optional[str] = None
         self.current_kind: str = "H"
         self.current_angles: Optional[np.ndarray] = None
@@ -62,6 +66,12 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         self.recon_v_source_var = tk.StringVar(value="")
         self.recon_h_source_var = tk.StringVar(value="")
         self.wireframe_var = tk.BooleanVar(value=False)
+        appearance = "Dark"
+        try:
+            appearance = str(ctk.get_appearance_mode() or "Dark")
+        except Exception:
+            appearance = "Dark"
+        self.appearance_var = tk.StringVar(value=appearance)
 
         self._pending_markers: List[MarkerValue] = []
         self._table_refresh_job = None
@@ -85,6 +95,23 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         ctk.CTkEntry(top, textvariable=self.xdb_var, width=70).pack(side="left", padx=2)
         ctk.CTkButton(top, text="Recalc", width=80, command=self._refresh_metrics).pack(side="left", padx=4)
         ctk.CTkButton(top, text="Clear markers", width=110, command=self.clear_markers).pack(side="left", padx=4)
+
+        tools = ctk.CTkFrame(self, fg_color="transparent")
+        tools.pack(fill="x", padx=8, pady=(0, 6))
+        ctk.CTkButton(tools, text="Import Cut", width=100, command=self.import_cut_file).pack(side="left", padx=3)
+        ctk.CTkButton(tools, text="Remove Imported", width=125, command=self.remove_current_imported_source).pack(side="left", padx=3)
+        ctk.CTkButton(tools, text="Export CSV", width=90, command=self.export_current_cut_csv).pack(side="left", padx=3)
+        ctk.CTkButton(tools, text="Export PAT", width=90, command=self.export_current_cut_pat).pack(side="left", padx=3)
+        ctk.CTkButton(tools, text="Save Session", width=105, command=self.save_advanced_session).pack(side="left", padx=3)
+        ctk.CTkButton(tools, text="Load Session", width=105, command=self.load_advanced_session).pack(side="left", padx=3)
+        ctk.CTkLabel(tools, text="Theme", width=45).pack(side="right", padx=(8, 2))
+        ctk.CTkOptionMenu(
+            tools,
+            variable=self.appearance_var,
+            values=["Dark", "Light", "System"],
+            width=110,
+            command=self.apply_appearance_theme,
+        ).pack(side="right", padx=2)
 
         body = ctk.CTkFrame(self)
         body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -256,7 +283,318 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
             float(np.sum(v)) if v.size else 0.0,
         )
 
-    def refresh_sources(self):
+    def apply_appearance_theme(self, value: str):
+        mode = str(value or "Dark").strip().capitalize()
+        if mode not in ("Dark", "Light", "System"):
+            mode = "Dark"
+        try:
+            ctk.set_appearance_mode(mode)
+            self.appearance_var.set(mode)
+            self._set_status(f"Tema aplicado: {mode}")
+            self._draw_current_cut()
+        except Exception as e:
+            messagebox.showerror("Theme", str(e))
+
+    @staticmethod
+    def _parse_cut_pairs_from_text(text: str) -> tuple[np.ndarray, np.ndarray]:
+        num_re = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+        angles: List[float] = []
+        values: List[float] = []
+        import re
+
+        for raw in str(text or "").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(("#", ";", "!", "//")):
+                continue
+            normalized = line.replace(",", ".")
+            nums = re.findall(num_re, normalized)
+            if len(nums) < 2:
+                continue
+            try:
+                ang = float(nums[0])
+                val = float(nums[1])
+            except Exception:
+                continue
+            angles.append(ang)
+            values.append(val)
+
+        if len(angles) < 3:
+            raise ValueError("Nao foi possivel extrair pares angulo/valor suficientes.")
+
+        ang_arr = np.asarray(angles, dtype=float).reshape(-1)
+        val_arr = np.asarray(values, dtype=float).reshape(-1)
+        if ang_arr.size != val_arr.size:
+            raise ValueError("Quantidade de angulos e valores divergente.")
+        return ang_arr, val_arr
+
+    @staticmethod
+    def _auto_kind_from_angles(angles: np.ndarray) -> str:
+        a = np.asarray(angles, dtype=float).reshape(-1)
+        if a.size == 0:
+            return "H"
+        amin = float(np.nanmin(a))
+        amax = float(np.nanmax(a))
+        span = abs(amax - amin)
+        if amin >= -95.0 and amax <= 95.0:
+            return "V"
+        if amin >= -190.0 and amax <= 190.0 and span >= 180.0:
+            return "H"
+        return "H" if span >= 150.0 else "V"
+
+    @staticmethod
+    def _ensure_linear(values: np.ndarray) -> np.ndarray:
+        v = np.asarray(values, dtype=float).reshape(-1)
+        if v.size == 0:
+            return v
+        if np.any(v < 0.0) or float(np.nanmax(v)) > 5.0:
+            return np.power(10.0, v / 20.0)
+        return np.clip(v, 0.0, None)
+
+    def import_cut_file(self):
+        path = filedialog.askopenfilename(
+            title="Import cut file",
+            filetypes=[
+                ("Pattern/Data", "*.csv *.txt *.pat *.prn"),
+                ("CSV", "*.csv"),
+                ("Text", "*.txt"),
+                ("PAT", "*.pat"),
+                ("PRN", "*.prn"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+            angles, values_raw = self._parse_cut_pairs_from_text(text)
+            values = self._ensure_linear(values_raw)
+            guess = self._auto_kind_from_angles(angles)
+            answer = simpledialog.askstring(
+                "Tipo do corte",
+                "Informe tipo do corte [H ou V]:",
+                initialvalue=guess,
+                parent=self,
+            )
+            if answer is None:
+                return
+            kind = str(answer).strip().upper()
+            if kind not in ("H", "V"):
+                messagebox.showwarning("Import", "Tipo invalido. Use H ou V.")
+                return
+
+            stem = os.path.splitext(os.path.basename(path))[0].strip() or "importado"
+            key_base = f"Importado {stem}"
+            key = key_base
+            idx = 2
+            while (key in self.user_sources) or (key in self.source_map):
+                key = f"{key_base} ({idx})"
+                idx += 1
+
+            self.user_sources[key] = {
+                "kind": kind,
+                "angles": np.asarray(angles, dtype=float),
+                "values": np.asarray(values, dtype=float),
+                "origin": os.path.abspath(path),
+            }
+            self.refresh_sources(preferred_key=key)
+            self._set_status(f"Corte importado: {key}")
+        except Exception as e:
+            messagebox.showerror("Import cut", str(e))
+
+    def remove_current_imported_source(self):
+        key = str(self.current_key or "").strip()
+        if not key:
+            return
+        if key not in self.user_sources:
+            messagebox.showinfo("Imported sources", "A fonte atual nao e um corte importado.")
+            return
+        self.user_sources.pop(key, None)
+        self.refresh_sources()
+        self._set_status(f"Fonte importada removida: {key}")
+
+    def export_current_cut_csv(self):
+        if self.current_angles is None or self.current_values is None:
+            messagebox.showwarning("Export CSV", "Nao ha corte carregado.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export current cut CSV",
+            defaultextension=".csv",
+            initialfile=f"{(self.current_key or 'cut').replace(' ', '_')}.csv",
+            filetypes=[("CSV", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        a = np.asarray(self.current_angles, dtype=float)
+        v = np.asarray(self.current_values, dtype=float)
+        if self.current_kind == "H":
+            aw = np.mod(a, 360.0)
+            idx = np.argsort(aw)
+            a = np.where(aw[idx] > 180.0, aw[idx] - 360.0, aw[idx])
+            v = v[idx]
+        else:
+            idx = np.argsort(a)
+            a = a[idx]
+            v = v[idx]
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                wr = csv.writer(f)
+                wr.writerow(["Angle_deg", "Level_linear", "Level_dB"])
+                for ang, lin in zip(a, v):
+                    db = 20.0 * math.log10(max(float(lin), 1e-12))
+                    wr.writerow([f"{float(ang):.6f}", f"{float(lin):.8f}", f"{float(db):.4f}"])
+            self._set_status(f"CSV exportado: {path}")
+        except Exception as e:
+            messagebox.showerror("Export CSV", str(e))
+
+    def export_current_cut_pat(self):
+        if self.current_angles is None or self.current_values is None:
+            messagebox.showwarning("Export PAT", "Nao ha corte carregado.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Export current cut PAT (simples)",
+            defaultextension=".pat",
+            initialfile=f"{(self.current_key or 'cut').replace(' ', '_')}.pat",
+            filetypes=[("PAT", "*.pat"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        a = np.asarray(self.current_angles, dtype=float)
+        v = np.asarray(self.current_values, dtype=float)
+        if self.current_kind == "H":
+            aw = np.mod(a, 360.0)
+            idx = np.argsort(aw)
+            a = np.where(aw[idx] > 180.0, aw[idx] - 360.0, aw[idx])
+            v = v[idx]
+        else:
+            idx = np.argsort(a)
+            a = a[idx]
+            v = v[idx]
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("; EFTX Advanced Visualization - PAT simples\n")
+                f.write(f"; Source: {self.current_key or '-'}\n")
+                f.write(f"; Kind: {self.current_kind}\n")
+                f.write("; Angle_deg Level_dB\n")
+                for ang, lin in zip(a, v):
+                    db = 20.0 * math.log10(max(float(lin), 1e-12))
+                    f.write(f"{float(ang):.6f} {float(db):.4f}\n")
+            self._set_status(f"PAT exportado: {path}")
+        except Exception as e:
+            messagebox.showerror("Export PAT", str(e))
+
+    def save_advanced_session(self):
+        path = filedialog.asksaveasfilename(
+            title="Salvar sessao do modeler avancado",
+            defaultextension=".json",
+            initialfile=f"advanced_modeler_session_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        markers = []
+        if self.interactor is not None:
+            for mk in self.interactor.markers():
+                markers.append(
+                    {
+                        "name": mk.name,
+                        "kind": mk.kind,
+                        "cut": mk.cut,
+                        "theta_deg": mk.theta_deg,
+                        "phi_deg": mk.phi_deg,
+                        "ang_deg": mk.ang_deg,
+                        "mag_lin": mk.mag_lin,
+                        "mag_db": mk.mag_db,
+                    }
+                )
+
+        imported = {}
+        for key, item in self.user_sources.items():
+            imported[key] = {
+                "kind": str(item.get("kind", "H")),
+                "angles": np.asarray(item.get("angles", []), dtype=float).tolist(),
+                "values": np.asarray(item.get("values", []), dtype=float).tolist(),
+                "origin": str(item.get("origin", "")),
+            }
+
+        payload = {
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "appearance": str(self.appearance_var.get() or "Dark"),
+            "current_key": str(self.current_key or ""),
+            "current_kind": str(self.current_kind or "H"),
+            "xdb": str(self.xdb_var.get() or "10"),
+            "imported_sources": imported,
+            "markers": markers,
+        }
+        try:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self._set_status(f"Sessao salva: {path}")
+        except Exception as e:
+            messagebox.showerror("Save session", str(e))
+
+    def load_advanced_session(self):
+        path = filedialog.askopenfilename(
+            title="Carregar sessao do modeler avancado",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Formato de sessao invalido.")
+
+            imported = data.get("imported_sources", {})
+            self.user_sources = {}
+            if isinstance(imported, dict):
+                for key, item in imported.items():
+                    if not isinstance(item, dict):
+                        continue
+                    ang = np.asarray(item.get("angles", []), dtype=float).reshape(-1)
+                    val = np.asarray(item.get("values", []), dtype=float).reshape(-1)
+                    if ang.size == 0 or val.size == 0 or ang.size != val.size:
+                        continue
+                    self.user_sources[str(key)] = {
+                        "kind": str(item.get("kind", "H")).upper(),
+                        "angles": ang,
+                        "values": np.clip(val, 0.0, None),
+                        "origin": str(item.get("origin", "")),
+                    }
+
+            self.xdb_var.set(str(data.get("xdb", self.xdb_var.get())))
+            self.apply_appearance_theme(str(data.get("appearance", self.appearance_var.get())))
+            preferred = str(data.get("current_key", ""))
+            self.refresh_sources(preferred_key=preferred)
+
+            self.clear_markers()
+            markers_raw = data.get("markers", [])
+            if self.interactor is not None and isinstance(markers_raw, list):
+                for item in markers_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        mk = MarkerValue(
+                            name=str(item.get("name", "m")),
+                            kind=str(item.get("kind", "2D")),
+                            cut=item.get("cut"),
+                            theta_deg=item.get("theta_deg"),
+                            phi_deg=item.get("phi_deg"),
+                            ang_deg=float(item.get("ang_deg", 0.0)),
+                            mag_lin=float(item.get("mag_lin", 0.0)),
+                            mag_db=float(item.get("mag_db", -120.0)),
+                        )
+                        self.interactor.add_marker_value(mk)
+                    except Exception:
+                        continue
+            self._set_status(f"Sessao carregada: {path}")
+        except Exception as e:
+            messagebox.showerror("Load session", str(e))
+
+    def refresh_sources(self, preferred_key: str = ""):
         src: Dict[str, dict] = {}
 
         def add(name: str, kind: str, angles, values):
@@ -281,10 +619,18 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
         add("HRP Study H2", "H", getattr(self.app, "study_h2_angles", None), getattr(self.app, "study_h2_vals", None))
         add("VRP Study V2", "V", getattr(self.app, "study_v2_angles", None), getattr(self.app, "study_v2_vals", None))
 
+        for key, item in list(self.user_sources.items()):
+            try:
+                add(key, str(item.get("kind", "H")).upper(), item.get("angles"), item.get("values"))
+            except Exception:
+                continue
+
         self.source_map = src
         keys = list(src.keys()) or [""]
         self.cut_menu.configure(values=keys)
-        if self.cut_var.get() not in src:
+        if preferred_key and preferred_key in src:
+            self.cut_var.set(preferred_key)
+        elif self.cut_var.get() not in src:
             self.cut_var.set(keys[0])
 
         v_keys = [k for k, item in src.items() if item["kind"] == "V"] or [""]
@@ -869,6 +1215,8 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
             m.add_command(label="Reset view", command=self._draw_current_cut)
             m.add_separator()
             m.add_command(label="Export current cut PNG", command=self._export_current_cut_png)
+            m.add_command(label="Export current cut CSV", command=self.export_current_cut_csv)
+            m.add_command(label="Export current cut PAT", command=self.export_current_cut_pat)
             m.add_command(label="Export PAT (Project)", command=self.app.export_all_pat)
             m.add_command(label="Export PRN (Project)", command=self.app.export_all_prn)
             m.add_command(label="Send to Study slot", command=self._send_current_to_study)

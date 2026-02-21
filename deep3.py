@@ -25,7 +25,6 @@ import tkinter as tk
 from io import StringIO
 from tkinter import filedialog, messagebox, simpledialog
 from typing import List, Tuple, Optional, Dict
-from logging.handlers import RotatingFileHandler
 
 import numpy as np
 from PIL import Image, ImageTk
@@ -37,6 +36,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from null_fill_synthesis import synth_null_fill_by_order, weights_to_harness
 from ui.tabs.tab_advanced_viz import AdvancedVisualizationTab
 from ui.tabs.tab_mechanical_analysis import MechanicalAnalysisTab
+from ui.tabs.tab_coverage_viability import CoverageViabilityTab
 from core.perf import PerfTracer
 from core.analysis.pattern_metrics import (
     directivity_2d_cut as d2d_cut_numba_wrapper,
@@ -44,6 +44,8 @@ from core.analysis.pattern_metrics import (
     metrics_cut_1d as metrics_cut_numba_wrapper,
     start_numba_warmup_thread,
 )
+from core.audit import emit_audit
+from core.logging.logger import LoggerConfig, build_logger
 from reports.pdf_report import export_report_pdf, ReportCancelled, ReportExportError
 try:
     from adapters.image_pipeline_controller import ImagePipelineController
@@ -127,21 +129,20 @@ def ensure_app_dirs() -> None:
 
 def setup_logging() -> logging.Logger:
     ensure_app_dirs()
-    logger = logging.getLogger("eftx")
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
-    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-    handler.setFormatter(fmt)
-    logger.addHandler(handler)
-    logger.propagate = False
+    logger = build_logger(
+        LoggerConfig(
+            name="eftx",
+            log_file=LOG_FILE,
+            level=logging.INFO,
+        )
+    )
     logger.info("Logging initialized.")
     return logger
 
 
 LOGGER = setup_logging()
 PERF = PerfTracer(LOGGER, threshold_s=0.010)
+emit_audit("app.startup", logger=LOGGER, python=sys.version, platform=sys.platform)
 
 
 def cleanup_legacy_user_install(logger: Optional[logging.Logger] = None) -> None:
@@ -2815,6 +2816,8 @@ class PATConverterApp(ctk.CTk):
         self._report_progress = {"current": 0, "total": 1, "label": "Pronto"}
         self._artifact_lock = threading.Lock()
         self._artifact_progress = {"current": 0, "total": 1, "label": "Pronto"}
+        self._report_export_t0: Optional[float] = None
+        self._wizard_export_t0: Optional[float] = None
         self.perf_tracer = PERF
         self.image_pipeline_controller = None
         if ImagePipelineController is not None:
@@ -2833,6 +2836,7 @@ class PATConverterApp(ctk.CTk):
         self.tab_horz = self.tabs.add("Composicao Horizontal")
         self.tab_study = self.tabs.add("Estudo Completo")
         self.tab_proj = self.tabs.add("Dados do Projeto")
+        self.tab_cov = self.tabs.add("Cobertura & Viabilidade")
         self.tab_adv = self.tabs.add("Visualizacao Avancada")
         self.tab_mech = self.tabs.add("Analise Mecanica")
         self.tab_diag = self.tabs.add("Diagramas (Batch)")
@@ -2842,6 +2846,8 @@ class PATConverterApp(ctk.CTk):
         self._build_tab_horizontal()
         self._build_tab_study()
         self._build_tab_project()
+        self.coverage_viability_view = CoverageViabilityTab(self.tab_cov, app=self)
+        self.coverage_viability_view.pack(fill="both", expand=True)
         self.advanced_tab_view = AdvancedVisualizationTab(self.tab_adv, app=self)
         self.advanced_tab_view.pack(fill="both", expand=True)
         self.mechanical_tab_view = MechanicalAnalysisTab(self.tab_mech, app=self)
@@ -2937,6 +2943,26 @@ class PATConverterApp(ctk.CTk):
         # Help Button
         ctk.CTkButton(header, text="Ajuda / Workflow", command=self.show_help, width=120, fg_color="#444444").pack(side="right", padx=10)
 
+    def _audit_emit(self, event: str, **fields):
+        try:
+            emit_audit(str(event or "APP_EVENT"), logger=LOGGER, **fields)
+        except Exception:
+            pass
+
+    def _audit_export_start(self, name: str, **fields) -> float:
+        t0 = time.perf_counter()
+        self._audit_emit(f"{name}_START", **fields)
+        return t0
+
+    def _audit_export_end(self, name: str, t0: float, status: str = "ok", **fields):
+        elapsed_ms = (time.perf_counter() - float(t0)) * 1000.0
+        self._audit_emit(
+            f"{name}_END",
+            status=str(status or "ok"),
+            elapsed_ms=round(float(elapsed_ms), 3),
+            **fields,
+        )
+
     def _build_menubar(self):
         menubar = tk.Menu(self)
 
@@ -2974,6 +3000,7 @@ class PATConverterApp(ctk.CTk):
         m_tools.add_command(label="Null Fill Wizard...", accelerator="Ctrl+W", command=self.open_null_fill_wizard)
         m_tools.add_command(label="Export Wizard...", accelerator="Ctrl+Shift+E", command=self.open_export_wizard)
         m_tools.add_command(label="Validate PRN/PAT...", command=self.open_validator)
+        m_tools.add_command(label="Coverage & Viability", accelerator="Ctrl+Shift+C", command=self.open_coverage_viability_view)
         m_tools.add_command(label="Advanced Visualization", accelerator="Ctrl+Shift+V", command=self.open_advanced_view)
         m_tools.add_command(label="Mechanical Analysis", accelerator="Ctrl+Shift+M", command=self.open_mechanical_view)
         menubar.add_cascade(label="Tools", menu=m_tools)
@@ -2987,6 +3014,7 @@ class PATConverterApp(ctk.CTk):
         m_window.add_command(label="Go to Diagramas", accelerator="Alt+6", command=lambda: self.tabs.set("Diagramas (Batch)"))
         m_window.add_command(label="Go to AEDT Live", accelerator="Alt+7", command=lambda: self._goto_tab("AEDT Live"))
         m_window.add_command(label="Go to Analise Mecanica", accelerator="Alt+8", command=self.open_mechanical_view)
+        m_window.add_command(label="Go to Cobertura & Viabilidade", accelerator="Alt+9", command=self.open_coverage_viability_view)
         menubar.add_cascade(label="Window", menu=m_window)
 
         m_help = tk.Menu(menubar, tearoff=0)
@@ -3008,6 +3036,7 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Control-e>", lambda e: self.export_all_pat())
         self.bind_all("<Control-Shift-E>", lambda e: self.open_export_wizard())
         self.bind_all("<Control-Shift-R>", lambda e: self.open_report_pdf_export())
+        self.bind_all("<Control-Shift-C>", lambda e: self.open_coverage_viability_view())
         self.bind_all("<Control-Shift-V>", lambda e: self.open_advanced_view())
         self.bind_all("<Control-Shift-M>", lambda e: self.open_mechanical_view())
         self.bind_all("<Control-p>", lambda e: self.export_all_prn())
@@ -3025,6 +3054,7 @@ class PATConverterApp(ctk.CTk):
         self.bind_all("<Alt-KeyPress-6>", lambda e: self.tabs.set("Diagramas (Batch)"))
         self.bind_all("<Alt-KeyPress-7>", lambda e: self._goto_tab("AEDT Live"))
         self.bind_all("<Alt-KeyPress-8>", lambda e: self.open_mechanical_view())
+        self.bind_all("<Alt-KeyPress-9>", lambda e: self.open_coverage_viability_view())
         self.bind_all("<Button-3>", self._global_context_menu, add="+")
         self.bind_all("<Button-2>", self._global_context_menu, add="+")
 
@@ -3084,6 +3114,16 @@ class PATConverterApp(ctk.CTk):
         except Exception:
             LOGGER.exception("Falha ao atualizar dados da aba de visualizacao avancada.")
 
+    def _notify_coverage_context_changed(self):
+        view = getattr(self, "coverage_viability_view", None)
+        if view is None:
+            return
+        try:
+            if self.output_dir:
+                view.set_root_dir(self.output_dir)
+        except Exception:
+            LOGGER.exception("Falha ao atualizar contexto da aba Cobertura & Viabilidade.")
+
     def open_advanced_view(self):
         try:
             self.tabs.set("Visualizacao Avancada")
@@ -3099,6 +3139,14 @@ class PATConverterApp(ctk.CTk):
         except Exception:
             LOGGER.exception("Falha ao abrir analise mecanica.")
 
+    def open_coverage_viability_view(self):
+        try:
+            self.tabs.set("Cobertura & Viabilidade")
+            self._notify_coverage_context_changed()
+            self._set_status("Cobertura & Viabilidade aberta.")
+        except Exception:
+            LOGGER.exception("Falha ao abrir aba Cobertura & Viabilidade.")
+
     def _global_context_menu(self, event):
         try:
             widget = getattr(event, "widget", None)
@@ -3111,6 +3159,7 @@ class PATConverterApp(ctk.CTk):
             m = tk.Menu(self, tearoff=0)
             m.add_command(label="Visualizacao Avancada", command=self.open_advanced_view)
             m.add_command(label="Analise Mecanica", command=self.open_mechanical_view)
+            m.add_command(label="Cobertura & Viabilidade", command=self.open_coverage_viability_view)
             m.add_command(label="Ajuda / Workflow", command=self.show_help)
             m.add_command(label="Abrir Log", command=self.open_log_window)
             m.add_command(label="Preferencias", command=self.open_preferences)
@@ -3534,13 +3583,22 @@ class PATConverterApp(ctk.CTk):
         ctk.CTkButton(btns, text="Fechar", fg_color="#666666", command=w.destroy).pack(side="right", padx=3)
 
     def _run_report_export_async(self, cfg: dict):
+        t0 = self._audit_export_start(
+            "EXPORT_REPORT_PDF",
+            output_pdf=str(cfg.get("output_pdf", "") or ""),
+            selected=int(len(cfg.get("selected_tags", []) or [])),
+            dpi=int(cfg.get("dpi", 300) or 300),
+            save_csv=int(bool(cfg.get("save_csv", True))),
+        )
         if self._any_export_task_running():
+            self._audit_export_end("EXPORT_REPORT_PDF", t0, status="skipped", reason="task-running")
             messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
             return
 
         self.task_cancel_event.clear()
         self._report_set_progress(0, 1, "Iniciando relatorio PDF...")
         self._task_ui_start("Relatorio PDF: iniciando...", 1)
+        self._report_export_t0 = t0
         self.report_future = self.export_executor.submit(self._report_export_worker, dict(cfg))
         self._poll_report_export()
 
@@ -3557,7 +3615,11 @@ class PATConverterApp(ctk.CTk):
     def _finalize_report_export(self):
         fut = self.report_future
         self.report_future = None
+        t0 = self._report_export_t0
+        self._report_export_t0 = None
         if fut is None:
+            if t0 is not None:
+                self._audit_export_end("EXPORT_REPORT_PDF", t0, status="skipped", reason="no-future")
             self._task_ui_finish("Relatorio PDF finalizado.")
             return
 
@@ -3565,6 +3627,8 @@ class PATConverterApp(ctk.CTk):
             res = fut.result()
         except Exception as e:
             LOGGER.exception("Falha no export do relatorio PDF.")
+            if t0 is not None:
+                self._audit_export_end("EXPORT_REPORT_PDF", t0, status="error", error=str(e))
             self._task_ui_finish("Falha no relatorio PDF.")
             messagebox.showerror("Erro", f"Falha na exportacao do relatorio PDF: {e}")
             return
@@ -3582,8 +3646,27 @@ class PATConverterApp(ctk.CTk):
 
         if cancelled:
             status = "Relatorio PDF cancelado."
+            if t0 is not None:
+                self._audit_export_end(
+                    "EXPORT_REPORT_PDF",
+                    t0,
+                    status="cancelled",
+                    pages=int(pages),
+                    warnings=int(len(warnings)),
+                    csv_files=int(len(csv_files)),
+                )
         else:
             status = f"Relatorio PDF concluido: {pages} pagina(s)."
+            if t0 is not None:
+                self._audit_export_end(
+                    "EXPORT_REPORT_PDF",
+                    t0,
+                    status="ok",
+                    pages=int(pages),
+                    warnings=int(len(warnings)),
+                    csv_files=int(len(csv_files)),
+                    output_pdf=str(output_pdf or ""),
+                )
         self._task_ui_finish(status)
 
         lines = [status]
@@ -3929,7 +4012,14 @@ class PATConverterApp(ctk.CTk):
             return dict(self._wizard_progress)
 
     def _run_export_wizard_async(self, out_dir: str, prefix: str, selected: dict):
+        t0 = self._audit_export_start(
+            "EXPORT_WIZARD",
+            output_dir=str(out_dir or ""),
+            prefix=str(prefix or ""),
+            selections=int(sum(1 for v in (selected or {}).values() if bool(v))),
+        )
         if self._any_export_task_running():
+            self._audit_export_end("EXPORT_WIZARD", t0, status="skipped", reason="task-running")
             messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
             return
 
@@ -3945,6 +4035,7 @@ class PATConverterApp(ctk.CTk):
         self.task_cancel_event.clear()
         self._wizard_set_progress(0, 1, "Iniciando exportacao...")
         self._task_ui_start("Export Wizard: iniciando...", 1)
+        self._wizard_export_t0 = t0
         self.export_future = self.export_executor.submit(self._export_wizard_worker, job)
         self._poll_export_wizard()
 
@@ -3961,13 +4052,19 @@ class PATConverterApp(ctk.CTk):
     def _finalize_export_wizard(self):
         fut = self.export_future
         self.export_future = None
+        t0 = self._wizard_export_t0
+        self._wizard_export_t0 = None
         if fut is None:
+            if t0 is not None:
+                self._audit_export_end("EXPORT_WIZARD", t0, status="skipped", reason="no-future")
             self._task_ui_finish("Export Wizard finalizado.")
             return
         try:
             res = fut.result()
         except Exception as e:
             LOGGER.exception("Falha no Export Wizard.")
+            if t0 is not None:
+                self._audit_export_end("EXPORT_WIZARD", t0, status="error", error=str(e))
             self._task_ui_finish("Falha no Export Wizard.")
             messagebox.showerror("Erro", f"Falha no Export Wizard: {e}")
             return
@@ -3988,6 +4085,24 @@ class PATConverterApp(ctk.CTk):
         status = f"Export Wizard concluido: {len(exported)} arquivo(s)."
         if cancelled:
             status += " Operacao cancelada."
+            if t0 is not None:
+                self._audit_export_end(
+                    "EXPORT_WIZARD",
+                    t0,
+                    status="cancelled",
+                    exported=int(len(exported)),
+                    warnings=int(len(warnings)),
+                    root=str(root or ""),
+                )
+        elif t0 is not None:
+            self._audit_export_end(
+                "EXPORT_WIZARD",
+                t0,
+                status="ok",
+                exported=int(len(exported)),
+                warnings=int(len(warnings)),
+                root=str(root or ""),
+            )
         self._task_ui_finish(status)
 
         msg = [status]
@@ -4705,8 +4820,10 @@ class PATConverterApp(ctk.CTk):
             return default
 
     def export_study_complete(self):
+        t0 = self._audit_export_start("EXPORT_STUDY_COMPLETE")
         out_dir = self.output_dir or filedialog.askdirectory(title="Escolha pasta de saida para o estudo completo")
         if not out_dir:
+            self._audit_export_end("EXPORT_STUDY_COMPLETE", t0, status="skipped", reason="no-output-dir")
             return
 
         base = self.base_name_var.get().strip() or "estudo"
@@ -4778,6 +4895,7 @@ class PATConverterApp(ctk.CTk):
                 self._register_export(table_png, f"STUDY_{slot}_TABLE_IMG")
                 exported.extend([table_csv, table_png])
             except Exception as e:
+                self._audit_export_end("EXPORT_STUDY_COMPLETE", t0, status="error", slot=slot, error=str(e))
                 messagebox.showerror("Erro de exportacao", f"Falha ao exportar {slot}: {e}")
                 return
 
@@ -4812,14 +4930,17 @@ class PATConverterApp(ctk.CTk):
                 self._register_export(prn_path, f"STUDY_POL{pol}_PRN")
                 exported.append(prn_path)
             except Exception as e:
+                self._audit_export_end("EXPORT_STUDY_COMPLETE", t0, status="error", pol=int(pol), error=str(e))
                 messagebox.showerror("Erro de exportacao PRN", f"Falha ao exportar POL{pol}: {e}")
                 return
 
         if not exported:
+            self._audit_export_end("EXPORT_STUDY_COMPLETE", t0, status="skipped", reason="no-data-exported")
             messagebox.showwarning("Sem dados", "Nao ha diagramas suficientes para exportacao do estudo.")
             return
 
         self._set_status(f"Estudo completo exportado: {len(exported)} arquivos em {out_dir}")
+        self._audit_export_end("EXPORT_STUDY_COMPLETE", t0, status="ok", output_dir=out_dir, exported=int(len(exported)))
 
     def _build_tab_study(self):
         top = ctk.CTkFrame(self.tab_study)
@@ -5423,6 +5544,7 @@ class PATConverterApp(ctk.CTk):
 
     def _apply_project_state(self, state: dict):
         self.output_dir = state.get("output_dir")
+        self._notify_coverage_context_changed()
 
         string_vars_state = state.get("string_vars", {})
         for key, val in string_vars_state.items():
@@ -5503,28 +5625,34 @@ class PATConverterApp(ctk.CTk):
         self._refresh_project_overview()
 
     def save_work_in_progress(self):
+        t0 = self._audit_export_start("SAVE_WORK_PROGRESS")
         path = filedialog.asksaveasfilename(
             title="Salvar progresso do projeto",
             defaultextension=".eftxproj.json",
             filetypes=[("Projeto EFTX", "*.eftxproj.json"), ("JSON", "*.json"), ("All Files", "*.*")]
         )
         if not path:
+            self._audit_export_end("SAVE_WORK_PROGRESS", t0, status="skipped", reason="no-path")
             return
         try:
             data = self._collect_project_state()
             atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
             self.project_file_path = path
             self._set_status(f"Progresso salvo: {path}")
+            self._audit_export_end("SAVE_WORK_PROGRESS", t0, status="ok", path=path)
         except Exception as e:
             LOGGER.exception("Erro ao salvar progresso.")
+            self._audit_export_end("SAVE_WORK_PROGRESS", t0, status="error", path=path, error=str(e))
             messagebox.showerror("Erro ao salvar progresso", str(e))
 
     def load_work_in_progress(self):
+        t0 = self._audit_export_start("LOAD_WORK_PROGRESS")
         path = filedialog.askopenfilename(
             title="Carregar progresso do projeto",
             filetypes=[("Projeto EFTX", "*.eftxproj.json"), ("JSON", "*.json"), ("All Files", "*.*")]
         )
         if not path:
+            self._audit_export_end("LOAD_WORK_PROGRESS", t0, status="skipped", reason="no-path")
             return
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -5534,17 +5662,22 @@ class PATConverterApp(ctk.CTk):
             self._apply_project_state(data)
             self.project_file_path = path
             self._set_status(f"Progresso carregado: {path}")
+            self._audit_export_end("LOAD_WORK_PROGRESS", t0, status="ok", path=path)
         except Exception as e:
             LOGGER.exception("Erro ao carregar progresso.")
+            self._audit_export_end("LOAD_WORK_PROGRESS", t0, status="error", path=path, error=str(e))
             messagebox.showerror("Erro ao carregar progresso", str(e))
 
     def export_recorded_files_bundle(self):
+        t0 = self._audit_export_start("EXPORT_RECORDED_BUNDLE")
         if not self.export_registry:
+            self._audit_export_end("EXPORT_RECORDED_BUNDLE", t0, status="skipped", reason="empty-registry")
             messagebox.showwarning("Sem exportacoes", "Nao ha arquivos exportados registrados neste projeto.")
             return
 
         out_root = filedialog.askdirectory(title="Escolha a pasta para exportar os arquivos ja exportados")
         if not out_root:
+            self._audit_export_end("EXPORT_RECORDED_BUNDLE", t0, status="skipped", reason="no-output-root")
             return
 
         try:
@@ -5599,7 +5732,16 @@ class PATConverterApp(ctk.CTk):
             self._set_status(
                 f"Pacote exportado em {bundle_dir} (copiados: {copied}, ausentes: {missing})."
             )
+            self._audit_export_end(
+                "EXPORT_RECORDED_BUNDLE",
+                t0,
+                status="ok",
+                bundle_dir=bundle_dir,
+                copied=int(copied),
+                missing=int(missing),
+            )
         except Exception as e:
+            self._audit_export_end("EXPORT_RECORDED_BUNDLE", t0, status="error", error=str(e))
             messagebox.showerror("Erro ao exportar pacote", str(e))
 
     def _project_base_name(self) -> str:
@@ -5708,12 +5850,15 @@ class PATConverterApp(ctk.CTk):
             return dict(self._artifact_progress)
 
     def generate_all_project_artifacts(self):
+        t0 = self._audit_export_start("EXPORT_ALL_ARTIFACTS")
         if self._any_export_task_running():
+            self._audit_export_end("EXPORT_ALL_ARTIFACTS", t0, status="skipped", reason="task-running")
             messagebox.showwarning("Exportacao em andamento", "Aguarde a exportacao atual terminar.")
             return
 
         root = self.output_dir or filedialog.askdirectory(title="Escolha a pasta para gerar todos os artefatos")
         if not root:
+            self._audit_export_end("EXPORT_ALL_ARTIFACTS", t0, status="skipped", reason="no-root")
             return
         base = self._project_base_name()
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -5725,6 +5870,7 @@ class PATConverterApp(ctk.CTk):
         self._artifact_set_progress(0, 1, "Iniciando geracao de artefatos...")
         self._task_ui_start("Gerando todos os artefatos do projeto...", 1)
         self.artifacts_future = self.export_executor.submit(self._generate_all_project_artifacts_worker, job)
+        self._audit_export_end("EXPORT_ALL_ARTIFACTS", t0, status="queued", root=out_dir, base=base)
         self._poll_generate_all_project_artifacts()
 
     def _poll_generate_all_project_artifacts(self):
@@ -5749,6 +5895,7 @@ class PATConverterApp(ctk.CTk):
         except Exception as e:
             LOGGER.exception("Falha ao gerar artefatos do projeto.")
             self._task_ui_finish("Falha na geracao de artefatos.")
+            self._audit_emit("EXPORT_ALL_ARTIFACTS_RESULT", status="error", error=str(e))
             messagebox.showerror("Erro", f"Falha ao gerar artefatos: {e}")
             return
 
@@ -5785,10 +5932,20 @@ class PATConverterApp(ctk.CTk):
             messagebox.showwarning("Geracao de Artefatos", "\n".join(lines))
         else:
             messagebox.showinfo("Geracao de Artefatos", "\n".join(lines))
+        self._audit_emit(
+            "EXPORT_ALL_ARTIFACTS_RESULT",
+            status="ok",
+            exported=int(len(exported)),
+            warnings=int(len(warnings)),
+            cancelled=int(bool(cancelled)),
+            root=root,
+        )
 
     def _generate_all_project_artifacts_worker(self, job: dict) -> dict:
+        t0 = time.perf_counter()
         root = str(job.get("root", os.getcwd()))
         base = str(job.get("base", self._project_base_name()))
+        self._audit_emit("EXPORT_ALL_ARTIFACTS_WORKER_START", base=base, root=root)
         patterns = self._collect_project_patterns()
         pairs = self._collect_project_prn_pairs()
         warnings = []
@@ -6089,6 +6246,16 @@ class PATConverterApp(ctk.CTk):
         _step("Manifesto")
 
         self._artifact_set_progress(total_steps, total_steps, "Geracao de artefatos finalizada.")
+        self._audit_emit(
+            "EXPORT_ALL_ARTIFACTS_WORKER_END",
+            status="ok",
+            base=base,
+            root=root,
+            exported=int(len(exported)),
+            warnings=int(len(warnings)),
+            cancelled=int(bool(cancelled)),
+            elapsed_ms=round((time.perf_counter() - t0) * 1000.0, 3),
+        )
         return {
             "root": root,
             "exported": exported,
@@ -6099,13 +6266,16 @@ class PATConverterApp(ctk.CTk):
         }
 
     def export_project_graph_images(self):
+        t0 = self._audit_export_start("EXPORT_PROJECT_GRAPHS")
         out_dir = self._project_prepare_export_dir("graficos")
         if not out_dir:
+            self._audit_export_end("EXPORT_PROJECT_GRAPHS", t0, status="skipped", reason="no-output-dir")
             return
 
         base = self._project_base_name()
         patterns = self._collect_project_patterns()
         if not patterns:
+            self._audit_export_end("EXPORT_PROJECT_GRAPHS", t0, status="skipped", reason="no-patterns")
             messagebox.showwarning("Sem dados", "Nao ha graficos disponiveis para exportar.")
             return
         exported = 0
@@ -6128,15 +6298,19 @@ class PATConverterApp(ctk.CTk):
                 messagebox.showwarning("Aviso", f"Falha ao exportar grafico '{tag}': {e}")
 
         self._set_status(f"Exportacao de graficos concluida: {exported} arquivo(s) em {out_dir}.")
+        self._audit_export_end("EXPORT_PROJECT_GRAPHS", t0, status="ok", output_dir=out_dir, exported=int(exported))
 
     def export_project_table_images(self):
+        t0 = self._audit_export_start("EXPORT_PROJECT_TABLES")
         out_dir = self._project_prepare_export_dir("tabelas")
         if not out_dir:
+            self._audit_export_end("EXPORT_PROJECT_TABLES", t0, status="skipped", reason="no-output-dir")
             return
 
         base = self._project_base_name()
         patterns = self._collect_project_patterns()
         if not patterns:
+            self._audit_export_end("EXPORT_PROJECT_TABLES", t0, status="skipped", reason="no-patterns")
             messagebox.showwarning("Sem dados", "Nao ha diagramas disponiveis para exportar tabelas.")
             return
 
@@ -6167,20 +6341,32 @@ class PATConverterApp(ctk.CTk):
                 messagebox.showwarning("Aviso", f"Falha ao gerar tabela '{tag}': {e}")
 
         if exported_png == 0 and exported_csv == 0:
+            self._audit_export_end("EXPORT_PROJECT_TABLES", t0, status="skipped", reason="no-files-exported")
             messagebox.showwarning("Sem exportacao", "Nenhuma tabela foi exportada.")
             return
         self._set_status(
             f"Exportacao de tabelas concluida: PNG={exported_png}, CSV={exported_csv} em {out_dir}."
         )
+        self._audit_export_end(
+            "EXPORT_PROJECT_TABLES",
+            t0,
+            status="ok",
+            output_dir=out_dir,
+            exported_png=int(exported_png),
+            exported_csv=int(exported_csv),
+        )
 
     def export_project_pat_files(self):
+        t0 = self._audit_export_start("EXPORT_PROJECT_PAT")
         out_dir = self._project_prepare_export_dir("pat")
         if not out_dir:
+            self._audit_export_end("EXPORT_PROJECT_PAT", t0, status="skipped", reason="no-output-dir")
             return
 
         base = self._project_base_name()
         patterns = self._collect_project_patterns()
         if not patterns:
+            self._audit_export_end("EXPORT_PROJECT_PAT", t0, status="skipped", reason="no-patterns")
             messagebox.showwarning("Sem dados", "Nao ha diagramas disponiveis para exportar PAT.")
             return
 
@@ -6207,18 +6393,23 @@ class PATConverterApp(ctk.CTk):
                 messagebox.showwarning("Aviso", f"Falha ao exportar PAT '{tag}': {e}")
 
         if exported == 0:
+            self._audit_export_end("EXPORT_PROJECT_PAT", t0, status="skipped", reason="no-files-exported")
             messagebox.showwarning("Sem exportacao", "Nenhum PAT foi exportado.")
             return
         self._set_status(f"Exportacao PAT concluida: {exported} arquivo(s) em {out_dir}.")
+        self._audit_export_end("EXPORT_PROJECT_PAT", t0, status="ok", output_dir=out_dir, exported=int(exported))
 
     def export_project_adt_files(self):
+        t0 = self._audit_export_start("EXPORT_PROJECT_ADT")
         out_dir = self._project_prepare_export_dir("pat_adt")
         if not out_dir:
+            self._audit_export_end("EXPORT_PROJECT_ADT", t0, status="skipped", reason="no-output-dir")
             return
 
         base = self._project_base_name()
         patterns = self._collect_project_patterns()
         if not patterns:
+            self._audit_export_end("EXPORT_PROJECT_ADT", t0, status="skipped", reason="no-patterns")
             messagebox.showwarning("Sem dados", "Nao ha diagramas disponiveis para exportar PAT ADT.")
             return
 
@@ -6233,18 +6424,23 @@ class PATConverterApp(ctk.CTk):
                 messagebox.showwarning("Aviso", f"Falha ao exportar ADT '{tag}': {e}")
 
         if exported == 0:
+            self._audit_export_end("EXPORT_PROJECT_ADT", t0, status="skipped", reason="no-files-exported")
             messagebox.showwarning("Sem exportacao", "Nenhum PAT ADT foi exportado.")
             return
         self._set_status(f"Exportacao PAT ADT concluida: {exported} arquivo(s) em {out_dir}.")
+        self._audit_export_end("EXPORT_PROJECT_ADT", t0, status="ok", output_dir=out_dir, exported=int(exported))
 
     def export_project_prn_files(self):
+        t0 = self._audit_export_start("EXPORT_PROJECT_PRN")
         out_dir = self._project_prepare_export_dir("prn")
         if not out_dir:
+            self._audit_export_end("EXPORT_PROJECT_PRN", t0, status="skipped", reason="no-output-dir")
             return
 
         base = self._project_base_name()
         pairs = self._collect_project_prn_pairs()
         if not pairs:
+            self._audit_export_end("EXPORT_PROJECT_PRN", t0, status="skipped", reason="no-pairs")
             messagebox.showwarning("Sem dados", "Nao ha pares H+V disponiveis para exportar PRN.")
             return
 
@@ -6275,9 +6471,11 @@ class PATConverterApp(ctk.CTk):
                 messagebox.showwarning("Aviso", f"Falha ao exportar PRN '{tag}': {e}")
 
         if exported == 0:
+            self._audit_export_end("EXPORT_PROJECT_PRN", t0, status="skipped", reason="no-files-exported")
             messagebox.showwarning("Sem exportacao", "Nenhum PRN foi exportado.")
             return
         self._set_status(f"Exportacao PRN concluida: {exported} arquivo(s) em {out_dir}.")
+        self._audit_export_end("EXPORT_PROJECT_PRN", t0, status="ok", output_dir=out_dir, exported=int(exported))
 
     # ... (rest of PATConverterApp)
 
@@ -6653,6 +6851,7 @@ class PATConverterApp(ctk.CTk):
         d = filedialog.askdirectory(title="Escolha a pasta de saida para .pat")
         if d:
             self.output_dir = d
+            self._notify_coverage_context_changed()
             self._set_status(f"Output dir: {d}")
 
     def export_single_pat(self, type_, fmt):
@@ -6661,6 +6860,7 @@ class PATConverterApp(ctk.CTk):
         type_: "V" ou "H"
         fmt: "PAT" (Standard) ou "ADT" (RFS Voltage)
         """
+        t0 = self._audit_export_start("EXPORT_SINGLE_PAT", pattern_type=str(type_), fmt=str(fmt))
         if type_ == "V":
             ang, val = self.v_angles, self.v_vals
             name_suffix = "_VRP"
@@ -6671,6 +6871,7 @@ class PATConverterApp(ctk.CTk):
             desc_suffix = " Horizontal Pattern"
             
         if ang is None or val is None:
+            self._audit_export_end("EXPORT_SINGLE_PAT", t0, status="skipped", reason="no-data")
             messagebox.showwarning("Aviso", f"Nenhum diagrama {type_} carregado.")
             return
 
@@ -6690,6 +6891,7 @@ class PATConverterApp(ctk.CTk):
                 write_pat_adt_format(path, base, ang, val, pattern_type=type_)
                 self._register_export(path, f"{type_}_ADT_PAT")
                 self._set_status(f"Exportado {type_} (ADT): {path}")
+                self._audit_export_end("EXPORT_SINGLE_PAT", t0, status="ok", path=path, export_kind="ADT")
             else:
                 # Standard PAT
                 # Use default gain=0, N=1 for single element export
@@ -6699,8 +6901,10 @@ class PATConverterApp(ctk.CTk):
                     write_pat_horizontal_new_format(path, base+desc_suffix, 0.0, 1, ang, val)
                 self._register_export(path, f"{type_}_PAT")
                 self._set_status(f"Exportado {type_} (PAT): {path}")
+                self._audit_export_end("EXPORT_SINGLE_PAT", t0, status="ok", path=path, export_kind="PAT")
                 
         except Exception as e:
+            self._audit_export_end("EXPORT_SINGLE_PAT", t0, status="error", error=str(e))
             messagebox.showerror("Erro Export", str(e))
 
     def _refresh_v_plot(self):
@@ -6714,12 +6918,16 @@ class PATConverterApp(ctk.CTk):
         self._plot_horizontal_file(self.h_angles, self.h_vals)
 
     def export_plot_img(self, type_):
+        t0 = self._audit_export_start("EXPORT_PLOT_IMAGE", pattern_type=str(type_))
         fname = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG Image", "*.png")])
-        if not fname: return
+        if not fname:
+            self._audit_export_end("EXPORT_PLOT_IMAGE", t0, status="skipped", reason="no-path")
+            return
         
         try:
             if type_ == "V":
                 if self.v_angles is None or self.v_vals is None:
+                    self._audit_export_end("EXPORT_PLOT_IMAGE", t0, status="skipped", reason="no-vertical-data")
                     messagebox.showwarning("Aviso", "Nenhum diagrama vertical carregado.")
                     return
                 fig, _ = build_diagram_export_figure(
@@ -6731,6 +6939,7 @@ class PATConverterApp(ctk.CTk):
                 )
             else:
                 if self.h_angles is None or self.h_vals is None:
+                    self._audit_export_end("EXPORT_PLOT_IMAGE", t0, status="skipped", reason="no-horizontal-data")
                     messagebox.showwarning("Aviso", "Nenhum diagrama horizontal carregado.")
                     return
                 fig, _ = build_diagram_export_figure(
@@ -6743,16 +6952,22 @@ class PATConverterApp(ctk.CTk):
             fig.savefig(fname, dpi=300)
             self._register_export(fname, f"{type_}_PLOT_IMG")
             self._set_status(f"Imagem salva: {fname}")
+            self._audit_export_end("EXPORT_PLOT_IMAGE", t0, status="ok", path=fname)
         except Exception as e:
+            self._audit_export_end("EXPORT_PLOT_IMAGE", t0, status="error", error=str(e))
             messagebox.showerror("Erro", str(e))
 
     def export_table_img(self, type_):
+        t0 = self._audit_export_start("EXPORT_TABLE_IMAGE", pattern_type=str(type_))
         fname = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG Image", "*.png")])
-        if not fname: return
+        if not fname:
+            self._audit_export_end("EXPORT_TABLE_IMAGE", t0, status="skipped", reason="no-path")
+            return
         
         try:
             if type_ == "V":
                 if self.v_angles is None or self.v_vals is None:
+                    self._audit_export_end("EXPORT_TABLE_IMAGE", t0, status="skipped", reason="no-vertical-data")
                     messagebox.showwarning("Aviso", "Nenhum diagrama vertical carregado.")
                     return
                 target_ang, target_val = self._table_points_vertical(self.v_angles, self.v_vals)
@@ -6760,6 +6975,7 @@ class PATConverterApp(ctk.CTk):
                 img = render_table_image(target_ang, vals_db, "dB", "#4e79a7", "Tabela Vertical Padrao")
             else:
                 if self.h_angles is None or self.h_vals is None:
+                    self._audit_export_end("EXPORT_TABLE_IMAGE", t0, status="skipped", reason="no-horizontal-data")
                     messagebox.showwarning("Aviso", "Nenhum diagrama horizontal carregado.")
                     return
                 target_ang, target_val = self._table_points_horizontal(self.h_angles, self.h_vals)
@@ -6769,7 +6985,9 @@ class PATConverterApp(ctk.CTk):
             img.save(fname)
             self._register_export(fname, f"{type_}_TABLE_IMG")
             self._set_status(f"Tabela salva: {fname}")
+            self._audit_export_end("EXPORT_TABLE_IMAGE", t0, status="ok", path=fname)
         except Exception as e:
+            self._audit_export_end("EXPORT_TABLE_IMAGE", t0, status="error", error=str(e))
             messagebox.showerror("Erro", str(e))
 
     def load_vertical(self):
@@ -6885,6 +7103,7 @@ class PATConverterApp(ctk.CTk):
 
     def export_all_pat(self):
         """Exporta arquivos .PAT para VRP e HRP"""
+        t0 = self._audit_export_start("EXPORT_ALL_PAT")
         base = self.base_name_var.get().strip() or "xxx"
         author = self.author_var.get().strip() or "gecesar"
         norm = self.norm_mode_var.get()
@@ -6925,10 +7144,14 @@ class PATConverterApp(ctk.CTk):
             write_pat_horizontal_new_format(path_h, f"{base}_HRP", 0.0, 1, ang_h, val_h)
             self._register_export(path_h, "ALL_HRP_PAT")
             self._set_status(f"HRP .PAT exportado: {path_h}")
+        exported_count = int(bool(has_v and has_h)) + int(bool(self.v_angles is not None)) + int(bool(self.h_angles is not None))
+        self._audit_export_end("EXPORT_ALL_PAT", t0, status="ok", output_dir=out_dir, exported=int(exported_count))
 
     def export_all_prn(self):
         """Exporta arquivo .PRN combinando VRP e HRP"""
+        t0 = self._audit_export_start("EXPORT_ALL_PRN")
         if self.v_angles is None or self.h_angles is None:
+            self._audit_export_end("EXPORT_ALL_PRN", t0, status="skipped", reason="missing-vrp-hrp")
             messagebox.showwarning("Dados incompletos", "Carregue ambos VRP e HRP para exportar .PRN")
             return
             
@@ -6962,6 +7185,7 @@ class PATConverterApp(ctk.CTk):
             )
             
             if not file_path:
+                self._audit_export_end("EXPORT_ALL_PRN", t0, status="skipped", reason="no-path")
                 return
                 
             # Escrever arquivo
@@ -6969,8 +7193,10 @@ class PATConverterApp(ctk.CTk):
                           fb_ratio, gain, h_angles, h_vals, v_angles, v_vals)
             self._register_export(file_path, "ALL_PRN")
             self._set_status(f"Arquivo .PRN exportado: {file_path}")
+            self._audit_export_end("EXPORT_ALL_PRN", t0, status="ok", path=file_path)
             
         except Exception as e:
+            self._audit_export_end("EXPORT_ALL_PRN", t0, status="error", error=str(e))
             messagebox.showerror("Erro ao exportar .PRN", str(e))
 
     # ==================== ABA 2 — COMPOSIÇÃO VERTICAL ==================== #
@@ -7679,7 +7905,9 @@ class PATConverterApp(ctk.CTk):
         ]
 
     def export_vertical_harness(self):
+        t0 = self._audit_export_start("EXPORT_VERT_HARNESS")
         if self.vert_synth_result is None or self.vert_harness is None:
+            self._audit_export_end("EXPORT_VERT_HARNESS", t0, status="skipped", reason="no-harness")
             messagebox.showwarning("Nada para exportar", "Execute o calculo de null fill antes.")
             return
 
@@ -7693,11 +7921,15 @@ class PATConverterApp(ctk.CTk):
             self._set_status(
                 "Harness exportado: " + ", ".join([p for _, p in items])
             )
+            self._audit_export_end("EXPORT_VERT_HARNESS", t0, status="ok", output_dir=out_dir, exported=int(len(items)))
         except Exception as e:
+            self._audit_export_end("EXPORT_VERT_HARNESS", t0, status="error", error=str(e))
             messagebox.showerror("Erro export harness", str(e))
 
     def export_vertical_array_pat(self):
+        t0 = self._audit_export_start("EXPORT_VERT_COMP_PAT")
         if self.vert_angles is None or self.vert_values is None:
+            self._audit_export_end("EXPORT_VERT_COMP_PAT", t0, status="skipped", reason="no-vertical-composition")
             messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição vertical primeiro.")
             return
         base = self.base_name_var.get().strip() or "xxx"
@@ -7713,13 +7945,17 @@ class PATConverterApp(ctk.CTk):
                                     self.vert_angles, self.vert_values, step)
         self._register_export(path_v, "VERT_COMP_PAT")
         self._set_status(f"VRP composto .PAT exportado: {path_v}")
+        self._audit_export_end("EXPORT_VERT_COMP_PAT", t0, status="ok", path=path_v)
 
     def export_vertical_array_prn(self):
+        t0 = self._audit_export_start("EXPORT_VERT_COMP_PRN")
         if self.vert_angles is None or self.vert_values is None:
+            self._audit_export_end("EXPORT_VERT_COMP_PRN", t0, status="skipped", reason="no-vertical-composition")
             messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição vertical primeiro.")
             return
             
         if self.h_angles is None or self.h_vals is None:
+            self._audit_export_end("EXPORT_VERT_COMP_PRN", t0, status="skipped", reason="missing-hrp")
             messagebox.showwarning("Dados incompletos", "Para exportar .PRN é necessário ter o HRP carregado na aba Arquivo.")
             return
             
@@ -7745,6 +7981,7 @@ class PATConverterApp(ctk.CTk):
             )
             
             if not file_path:
+                self._audit_export_end("EXPORT_VERT_COMP_PRN", t0, status="skipped", reason="no-path")
                 return
                 
             # Escrever arquivo
@@ -7752,8 +7989,10 @@ class PATConverterApp(ctk.CTk):
                           fb_ratio, gain, h_angles, h_vals, self.vert_angles, self.vert_values)
             self._register_export(file_path, "VERT_COMP_PRN")
             self._set_status(f"Arquivo .PRN exportado: {file_path}")
+            self._audit_export_end("EXPORT_VERT_COMP_PRN", t0, status="ok", path=file_path)
             
         except Exception as e:
+            self._audit_export_end("EXPORT_VERT_COMP_PRN", t0, status="error", error=str(e))
             messagebox.showerror("Erro ao exportar .PRN", str(e))
 
     # ==================== ABA 3 — COMPOSIÇÃO HORIZONTAL ==================== #
@@ -8125,7 +8364,9 @@ class PATConverterApp(ctk.CTk):
         self._set_readonly_text(self.horz_comp_info_text, "\n".join(lines))
 
     def export_horizontal_array_pat(self):
+        t0 = self._audit_export_start("EXPORT_HORZ_COMP_PAT")
         if self.horz_angles is None or self.horz_values is None:
+            self._audit_export_end("EXPORT_HORZ_COMP_PAT", t0, status="skipped", reason="no-horizontal-composition")
             messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição horizontal primeiro.")
             return
         base = self.base_name_var.get().strip() or "xxx"
@@ -8141,9 +8382,12 @@ class PATConverterApp(ctk.CTk):
                                       self.horz_angles, self.horz_values, step)
         self._register_export(path_h, "HORZ_COMP_PAT")
         self._set_status(f"HRP composto .PAT exportado: {path_h}")
+        self._audit_export_end("EXPORT_HORZ_COMP_PAT", t0, status="ok", path=path_h)
 
     def export_horizontal_array_rfs(self):
+        t0 = self._audit_export_start("EXPORT_HORZ_COMP_RFS")
         if self.horz_angles is None or self.horz_values is None:
+            self._audit_export_end("EXPORT_HORZ_COMP_RFS", t0, status="skipped", reason="no-horizontal-composition")
             messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição horizontal primeiro.")
             return
         
@@ -8160,15 +8404,20 @@ class PATConverterApp(ctk.CTk):
              write_pat_horizontal_rfs(path_h, description, gain, num_antennas, self.horz_angles, self.horz_values)
              self._register_export(path_h, "HORZ_COMP_RFS_PAT")
              self._set_status(f"HRP RFS .PAT exportado: {path_h}")
+             self._audit_export_end("EXPORT_HORZ_COMP_RFS", t0, status="ok", path=path_h)
         except Exception as e:
+             self._audit_export_end("EXPORT_HORZ_COMP_RFS", t0, status="error", error=str(e))
              messagebox.showerror("Erro Export RFS", str(e))
 
     def export_horizontal_array_prn(self):
+        t0 = self._audit_export_start("EXPORT_HORZ_COMP_PRN")
         if self.horz_angles is None or self.horz_values is None:
+            self._audit_export_end("EXPORT_HORZ_COMP_PRN", t0, status="skipped", reason="no-horizontal-composition")
             messagebox.showwarning("Nada para exportar", "Execute o cálculo da composição horizontal primeiro.")
             return
             
         if self.v_angles is None or self.v_vals is None:
+            self._audit_export_end("EXPORT_HORZ_COMP_PRN", t0, status="skipped", reason="missing-vrp")
             messagebox.showwarning("Dados incompletos", "Para exportar .PRN é necessário ter o VRP carregado na aba Arquivo.")
             return
             
@@ -8201,6 +8450,7 @@ class PATConverterApp(ctk.CTk):
             )
             
             if not file_path:
+                self._audit_export_end("EXPORT_HORZ_COMP_PRN", t0, status="skipped", reason="no-path")
                 return
                 
             # Escrever arquivo
@@ -8208,8 +8458,10 @@ class PATConverterApp(ctk.CTk):
                           fb_ratio, gain, self.horz_angles, self.horz_values, v_angles, v_vals)
             self._register_export(file_path, "HORZ_COMP_PRN")
             self._set_status(f"Arquivo .PRN exportado: {file_path}")
+            self._audit_export_end("EXPORT_HORZ_COMP_PRN", t0, status="ok", path=file_path)
             
         except Exception as e:
+            self._audit_export_end("EXPORT_HORZ_COMP_PRN", t0, status="error", error=str(e))
             messagebox.showerror("Erro ao exportar .PRN", str(e))
 
     # ----------------------------- Misc ----------------------------- #
