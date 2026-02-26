@@ -8,6 +8,7 @@ from core.divider_aedt import (
     _alt_hfss_constructor_kwargs,
     _build_hfss_constructor_kwargs,
     _normalize_project_target,
+    analyze_impedance_adjustments,
     compute_s11_metrics,
     compute_coaxial_divider_geometry,
 )
@@ -192,3 +193,35 @@ def test_extract_s11_metrics_reads_y_vector_from_solution_data():
     assert out["frequency"] == pytest.approx([600.0, 700.0])
     assert out["return_loss_db"][0] == pytest.approx(20.0, rel=1e-6)
     assert out["return_loss_db"][1] == pytest.approx(13.9794000867, rel=1e-6)
+
+
+def test_analyze_impedance_adjustments_returns_viable_suggestions():
+    rf_data = {
+        "frequency": [600.0, 650.0, 700.0, 750.0, 800.0],
+        "return_loss_db": [8.0, 9.5, 10.0, 9.0, 8.5],
+        "impedance_real_ohm": [58.0, 56.0, 55.0, 56.0, 57.0],
+        "impedance_imag_ohm": [8.0, 5.0, 3.0, 4.0, 6.0],
+    }
+    params = {
+        "f_start": 600.0,
+        "f_stop": 800.0,
+        "d_ext": 33.0,
+        "wall_thick": 1.5,
+        "n_sections": 4,
+        "n_outputs": 4,
+    }
+    out = analyze_impedance_adjustments(rf_data, params)
+    assert len(out) == 2
+    keys = {row["variable"] for row in out}
+    assert "d_ext_mm" in keys
+    assert "wall_thick_mm" in keys
+    assert "f_start_mhz" not in keys
+    assert "f_stop_mhz" not in keys
+    assert "n_sections" not in keys
+    assert "outputs" not in keys
+    assert "dielectric" not in keys
+
+    d_ext_row = next(row for row in out if row["variable"] == "d_ext_mm")
+    wall_row = next(row for row in out if row["variable"] == "wall_thick_mm")
+    assert d_ext_row["suggested"] < params["d_ext"]  # Zreal high => reduce d_ext
+    assert wall_row["suggested"] > params["wall_thick"]  # Zreal high => increase wall

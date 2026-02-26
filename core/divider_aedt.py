@@ -1,4 +1,4 @@
-"""Coaxial divider geometry + AEDT/HFSS model generation helpers.
+﻿"""Coaxial divider geometry + AEDT/HFSS model generation helpers.
 
 This module mirrors the geometry logic from ``exemplo_divisor.md`` while
 keeping the UI layer independent from AEDT runtime details.
@@ -518,6 +518,86 @@ def compute_s11_metrics(s11_complex: Sequence[complex], z0: float = 50.0) -> dic
     }
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def analyze_impedance_adjustments(
+    rf_data: Mapping[str, Any],
+    params: Mapping[str, Any],
+    *,
+    z0: float = 50.0,
+) -> list[dict]:
+    """Analyze complex impedance and suggest viable variable adjustments.
+
+    Returns dictionaries with:
+    ``variable``, ``current``, ``suggested``, ``delta``, ``priority``,
+    ``confidence``, ``rationale``.
+
+    Automatic adjustment is intentionally restricted to geometry variables
+    safe for impedance auto-tune: ``d_ext_mm`` and ``wall_thick_mm``.
+    """
+    freq = np.asarray(rf_data.get("frequency", []), dtype=float).reshape(-1)
+    zr = np.asarray(rf_data.get("impedance_real_ohm", []), dtype=float).reshape(-1)
+    zi = np.asarray(rf_data.get("impedance_imag_ohm", []), dtype=float).reshape(-1)
+
+    if len(freq) < 2 or len(zr) < 2 or len(zi) < 2:
+        return []
+
+    n = min(len(freq), len(zr), len(zi))
+    freq = freq[:n]
+    zr = zr[:n]
+
+    f_start = float(params.get("f_start", float(freq[0])))
+    f_stop = float(params.get("f_stop", float(freq[-1])))
+    f0 = 0.5 * (f_start + f_stop)
+    i0 = int(np.argmin(np.abs(freq - f0)))
+
+    z_real_0 = float(zr[i0])
+    mismatch_real = z_real_0 - float(z0)
+
+    d_ext = float(params.get("d_ext", 20.0))
+    wall = float(params.get("wall_thick", 1.5))
+    step_d = _clamp(abs(mismatch_real) * 0.01, 0.05, 0.8)
+    step_wall = _clamp(abs(mismatch_real) * 0.005, 0.03, 0.4)
+
+    suggestions: list[dict] = []
+
+    # d_ext: larger d_ext tends to increase characteristic impedance.
+    d_ext_new = d_ext - step_d if mismatch_real > 0 else d_ext + step_d
+    d_ext_new = _clamp(d_ext_new, (2.0 * wall) + 0.25, 500.0)
+    suggestions.append(
+        {
+            "variable": "d_ext_mm",
+            "current": d_ext,
+            "suggested": d_ext_new,
+            "delta": d_ext_new - d_ext,
+            "priority": 1,
+            "confidence": "medium",
+            "rationale": (
+                f"Zreal@f0={z_real_0:.3f}Ohm vs target {float(z0):.1f}Ohm. "
+                "Adjusting outer diameter helps move real impedance toward target."
+            ),
+        }
+    )
+
+    # wall_thick: thicker wall reduces inner diameter, generally reducing impedance.
+    wall_new = wall + step_wall if mismatch_real > 0 else wall - step_wall
+    wall_new = _clamp(wall_new, 0.1, max(0.1, (d_ext / 2.0) - 0.2))
+    suggestions.append(
+        {
+            "variable": "wall_thick_mm",
+            "current": wall,
+            "suggested": wall_new,
+            "delta": wall_new - wall,
+            "priority": 1,
+            "confidence": "medium",
+            "rationale": "Wall thickness adjustment complements d_ext to tune real impedance matching.",
+        }
+    )
+
+    suggestions.sort(key=lambda item: (int(item.get("priority", 99)), str(item.get("variable", ""))))
+    return suggestions
 def _extract_s11_metrics_from_hfss(
     hfss: Any,
     *,
