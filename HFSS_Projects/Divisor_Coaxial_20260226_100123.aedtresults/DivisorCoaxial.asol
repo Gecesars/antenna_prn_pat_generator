@@ -1,0 +1,124 @@
+$begin '$base_index$'
+  $begin 'properties'
+    all_levels=000000000000
+    time(year=000000002026, month=000000000002, day=000000000026, hour=000000000010, min=000000000001, sec=000000000049)
+    version=000000000000
+  $end 'properties'
+  $begin '$base_index$'
+    $index$(pos=000000005277, lin=000000000103, lvl=000000000000)
+  $end '$base_index$'
+$end '$base_index$'
+$begin 'SolutionBlock1'
+	ProductName=''
+	CircuitName='DivisorCoaxial'
+	VersionID=18
+	PostProcess=false
+	LossLess=true
+	NextUniqueID=88
+	MoveBackwards=false
+	$begin 'VariationIDs'
+		Map(V='comp_saida=\'21.407325765311171mm\' comp_secoes=\'214.07325765311171mm\' comp_total=\'224.77692053576732mm\' d_ext=\'25mm\' dia_int_tubo=\'22mm\' dia_saida_cond=\'9.5523935534336406mm\' dia_saida_diel=\'22mm\' dia_sc1=\'12.196367100210564mm\' dia_sc2=\'16.380478509635562mm\' f0=\'700MHz\' f_start=\'600MHz\' f_stop=\'800MHz\' n_outputs=\'4\' n_sections=\'2\' wall_thick=\'1.5mm\'', ID=28)
+	$end 'VariationIDs'
+	$begin 'LinkedDataList'
+	$end 'LinkedDataList'
+	MeshAssemVersionID=18
+	$begin 'NextAssemVersionID'
+		NextUniqueID=19
+		MoveBackwards=false
+	$end 'NextAssemVersionID'
+	$begin 'MI'
+	$end 'MI'
+	VersionID2=19
+$end 'SolutionBlock1'
+$begin 'BlockMapName'
+	FileHeader='SolutionBlock1'
+	'SolutionKey(SimSetup=25, Instance=\'SetupDefinition\', Solution=-1, VersionID=0)'='SolutionBlock5'
+	'SolutionKey(SimSetup=25, Instance=\'SolutionDefinition\', Solution=26, VersionID=0)'='SolutionBlock2'
+	'SolutionKey(SimSetup=25, Instance=\'SolutionDefinition\', Solution=27, VersionID=0)'='SolutionBlock3'
+	'SolutionKey(SimSetup=25, Instance=\'SolutionDefinition\', Solution=31, VersionID=33)'='SolutionBlock4'
+$end 'BlockMapName'
+$begin 'SolutionBlock2'
+	SolutionName='AdaptivePass'
+	SolutionID=26
+	V=0
+	$begin 'States'
+	$end 'States'
+	$begin 'Definition'
+		SamplingInterpolation=false
+		Frequencies(5000000000)
+		SolutionType=6
+		CenterFreq=0
+	$end 'Definition'
+	IsImported=false
+	IsTable=false
+	IsMatrixDataTable=false
+	SweepID=-1
+	KeepAllFastSweepFields=false
+$end 'SolutionBlock2'
+$begin 'SolutionBlock3'
+	SolutionName='LastAdaptive'
+	SolutionID=27
+	V=0
+	$begin 'States'
+	$end 'States'
+	$begin 'Definition'
+		SamplingInterpolation=false
+		Frequencies(5000000000)
+		SolutionType=6
+		CenterFreq=0
+	$end 'Definition'
+	IsImported=false
+	IsTable=false
+	IsMatrixDataTable=false
+	SweepID=-1
+	KeepAllFastSweepFields=false
+$end 'SolutionBlock3'
+$begin 'SolutionBlock4'
+	SolutionName='Sweep1'
+	SolutionID=31
+	V=33
+	$begin 'States'
+	$end 'States'
+	$begin 'Definition'
+		SamplingInterpolation=false
+		Frequencies(600000000, 601000000, 602000000, 603000000, 604000000, 605000000, 606000000, 607000000, 608000000, 609000000, 610000000, 611000000, 612000000, 613000000, 614000000, 615000000, 616000000, 617000000, 618000000, 619000000, 620000000, 621000000, 622000000, 623000000, 624000000, 625000000, 626000000, 627000000, 628000000, 629000000, 630000000, 631000000, 632000000, 633000000, 634000000, 635000000, 636000000, 637000000, 638000000, 639000000, 640000000, 641000000, 642000000, 643000000, 644000000, 645000000, 646000000, 647000000, 648000000, 649000000, 650000000, 651000000, 652000000, 653000000, 654000000, 655000000, 656000000, 657000000, 658000000, 659000000, 660000000, 661000000, 662000000, 663000000, 664000000, 665000000, 666000000, 667000000, 668000000, 669000000, 670000000, 671000000, 672000000, 673000000, 674000000, 675000000, 676000000, 677000000, 678000000, 679000000, 680000000, 681000000, 682000000, 683000000, 684000000, 685000000, 686000000, 687000000, 688000000, 689000000, 690000000, 691000000, 692000000, 693000000, 694000000, 695000000, 696000000, 697000000, 698000000, 699000000, 700000000, 701000000, 702000000, 703000000, 704000000, 705000000, 706000000, 707000000, 708000000, 709000000, 710000000, 711000000, 712000000, 713000000, 714000000, 715000000, 716000000, 717000000, 718000000, 719000000, 720000000, 721000000, 722000000, 723000000, 724000000, 725000000, 726000000, 727000000, 728000000, 729000000, 730000000, 731000000, 732000000, 733000000, 734000000, 735000000, 736000000, 737000000, 738000000, 739000000, 740000000, 741000000, 742000000, 743000000, 744000000, 745000000, 746000000, 747000000, 748000000, 749000000, 750000000, 751000000, 752000000, 753000000, 754000000, 755000000, 756000000, 757000000, 758000000, 759000000, 760000000, 761000000, 762000000, 763000000, 764000000, 765000000, 766000000, 767000000, 768000000, 769000000, 770000000, 771000000, 772000000, 773000000, 774000000, 775000000, 776000000, 777000000, 778000000, 779000000, 780000000, 781000000, 782000000, 783000000, 784000000, 785000000, 786000000, 787000000, 788000000, 789000000, 790000000, 791000000, 792000000, 793000000, 794000000, 795000000, 796000000, 797000000, 798000000, 799000000, 800000000)
+		SolutionType=4
+		CenterFreq=0
+	$end 'Definition'
+	IsImported=false
+	IsTable=false
+	IsMatrixDataTable=false
+	SweepID=0
+	KeepAllFastSweepFields=false
+$end 'SolutionBlock4'
+$begin 'SolutionBlock5'
+	SimSetupID=25
+	SimSetupName='Setup1'
+	VersionID=0
+	IsImported=false
+	IsTable=false
+	SolveSetupID=0
+	MeshAssemVersionID=0
+	$begin 'NextAssemVersionID'
+		NextUniqueID=1
+		MoveBackwards=false
+	$end 'NextAssemVersionID'
+	$begin 'ADP'
+	$end 'ADP'
+	$begin 'SU'
+	$end 'SU'
+	$begin 'MI'
+	$end 'MI'
+$end 'SolutionBlock5'
+$begin '$index$'
+	$begin '$index$'
+		SolutionBlock2(pos=1682, lin=30, lvl=0)
+		SolutionBlock3(pos=2037, lin=48, lvl=0)
+		SolutionBlock4(pos=2392, lin=66, lvl=0)
+		SolutionBlock5(pos=4940, lin=84, lvl=0)
+		BlockMapName(pos=1197, lin=23, lvl=0)
+		SolutionBlock1(pos=370, lin=1, lvl=0)
+		$base_index$(pos=0, lin=1, lvl=0)
+		$index$(pos=5277, lin=103, lvl=0)
+	$end '$index$'
+$end '$index$'

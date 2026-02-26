@@ -1,0 +1,13 @@
+$begin 'CacheDataVersion'
+	DataVersion=2
+$end 'CacheDataVersion'
+$begin 'VariableValues'
+	comp_total='157.343844375037mm'
+	comp_secoes='149.851280357178mm'
+	dia_int_tubo='17mm'
+	dia_saida_diel='17mm'
+	dia_saida_cond='7.38139501856236mm'
+	comp_saida='14.9851280357178mm'
+	dia_sc1='8.42914146521014mm'
+	dia_sc2='10.351846526208mm'
+$end 'VariableValues'

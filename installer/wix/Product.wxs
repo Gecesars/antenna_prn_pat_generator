@@ -4,7 +4,7 @@
   <Package
     Name="EFTX Diagram Suite"
     Manufacturer="EFTX"
-    Version="1.4.0"
+    Version="1.2.2"
     UpgradeCode="{952E3852-5953-4393-9467-336714151614}"
     InstallerVersion="500"
     Compressed="yes"
@@ -12,14 +12,39 @@
 
     <MediaTemplate EmbedCab="yes" />
 
-    <MajorUpgrade DowngradeErrorMessage="Uma versao mais recente ja esta instalada." />
+    <MajorUpgrade AllowDowngrades="yes" />
+
+    <Upgrade Id="{952E3852-5953-4393-9467-336714151614}">
+      <UpgradeVersion
+        Minimum="0.0.0"
+        IncludeMinimum="yes"
+        Maximum="1.2.2"
+        IncludeMaximum="no"
+        Property="EFTX_OLDER_FOUND" />
+      <UpgradeVersion
+        Minimum="1.2.2"
+        IncludeMinimum="no"
+        Property="EFTX_NEWER_FOUND"
+        OnlyDetect="yes" />
+      <UpgradeVersion
+        Minimum="1.2.2"
+        IncludeMinimum="yes"
+        Maximum="1.2.2"
+        IncludeMaximum="yes"
+        Property="EFTX_SAME_FOUND"
+        OnlyDetect="yes" />
+    </Upgrade>
 
     <Icon Id="AppIcon" SourceFile="icon.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <Property Id="INSTALLLEVEL" Value="100" />
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="ALLOWUPGRADE" Value="0" Secure="yes" />
+    <Property Id="ALLOWDOWNGRADE" Value="0" Secure="yes" />
 
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+    <WixVariable Id="WixUIBannerBmp" Value="ui_banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="ui_dialog.bmp" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLROOT" Name="EFTX">
@@ -70,6 +95,45 @@
       <ComponentRef Id="CmpShortcutDesktop" />
     </Feature>
 
-    <ui:WixUI Id="WixUI_FeatureTree" />
+    <UI>
+      <ui:WixUI Id="WixUI_FeatureTree" />
+
+      <Dialog Id="EFTXOlderVersionDlg" Width="370" Height="270" Title="EFTX Diagram Suite">
+        <Control Id="Title" Type="Text" X="15" Y="12" Width="340" Height="36" Transparent="yes" NoPrefix="yes" Text="{\\WixUI_Font_Title}Versao existente detectada" />
+        <Control Id="Body" Type="Text" X="20" Y="58" Width="330" Height="120" Transparent="yes" NoPrefix="yes" Text="Foi detectada uma versao anterior instalada do EFTX Diagram Suite.&#x0A;&#x0A;Escolha como prosseguir:&#x0A;- Atualizar a instalacao existente;&#x0A;- Cancelar o instalador." />
+        <Control Id="ContinueBtn" Type="PushButton" X="148" Y="243" Width="100" Height="17" Default="yes" Text="Atualizar">
+          <Publish Event="SetProperty" Value="ALLOWUPGRADE=1" Condition="1" />
+          <Publish Event="EndDialog" Value="Return" Condition="1" />
+        </Control>
+        <Control Id="CancelBtn" Type="PushButton" X="258" Y="243" Width="100" Height="17" Cancel="yes" Text="Cancelar">
+          <Publish Event="SpawnDialog" Value="CancelDlg" Condition="1" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="EFTXNewerVersionDlg" Width="370" Height="270" Title="EFTX Diagram Suite">
+        <Control Id="Title" Type="Text" X="15" Y="12" Width="340" Height="36" Transparent="yes" NoPrefix="yes" Text="{\\WixUI_Font_Title}Versao mais recente detectada" />
+        <Control Id="Body" Type="Text" X="20" Y="58" Width="330" Height="120" Transparent="yes" NoPrefix="yes" Text="Foi detectada uma versao mais recente ja instalada do EFTX Diagram Suite.&#x0A;&#x0A;Escolha como prosseguir:&#x0A;- Fazer downgrade para esta versao 1.2.2;&#x0A;- Cancelar o instalador." />
+        <Control Id="ContinueBtn" Type="PushButton" X="128" Y="243" Width="120" Height="17" Default="yes" Text="Fazer downgrade">
+          <Publish Event="SetProperty" Value="ALLOWDOWNGRADE=1" Condition="1" />
+          <Publish Event="EndDialog" Value="Return" Condition="1" />
+        </Control>
+        <Control Id="CancelBtn" Type="PushButton" X="258" Y="243" Width="100" Height="17" Cancel="yes" Text="Cancelar">
+          <Publish Event="SpawnDialog" Value="CancelDlg" Condition="1" />
+        </Control>
+      </Dialog>
+
+      <Publish
+        Dialog="WelcomeDlg"
+        Control="Next"
+        Event="SpawnDialog"
+        Value="EFTXNewerVersionDlg"
+        Condition="EFTX_NEWER_FOUND AND (ALLOWDOWNGRADE&lt;&gt;1)" />
+      <Publish
+        Dialog="WelcomeDlg"
+        Control="Next"
+        Event="SpawnDialog"
+        Value="EFTXOlderVersionDlg"
+        Condition="(NOT EFTX_NEWER_FOUND) AND EFTX_OLDER_FOUND AND (ALLOWUPGRADE&lt;&gt;1)" />
+    </UI>
   </Package>
 </Wix>
