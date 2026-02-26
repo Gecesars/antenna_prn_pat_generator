@@ -5,7 +5,6 @@ import hashlib
 import logging
 import os
 import time
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,6 +20,8 @@ except Exception as e:  # pragma: no cover
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
+from core.audit import audit_span, emit_audit
+from core.logging.logger import LoggerConfig, build_logger
 from .bridge import AppBridge
 from .cut_tools import mag_db_from_linear, shift_cut_no_interp, transform_cut
 from .export import PatternExport
@@ -46,18 +47,14 @@ HFSS_FUNCTIONS = ["<none>", "dB", "normalize", "dB10normalize", "dB20normalize",
 
 
 def _build_aedt_logger() -> logging.Logger:
-    log_dir = Path(os.path.expanduser("~")) / ".eftx_converter" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "aedt_live.log"
-    logger = logging.getLogger("eftx.aedt_live")
-    if logger.handlers:
-        return logger
-    logger.setLevel(logging.INFO)
-    handler = RotatingFileHandler(log_file, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
-    logger.addHandler(handler)
-    logger.propagate = False
-    return logger
+    log_file = str((Path(os.path.expanduser("~")) / ".eftx_converter" / "logs" / "aedt_live.log"))
+    return build_logger(
+        LoggerConfig(
+            name="eftx.aedt_live",
+            level=logging.INFO,
+            log_file=log_file,
+        )
+    )
 
 
 class AedtLiveTab(ctk.CTkFrame):
@@ -1983,12 +1980,20 @@ class AedtLiveTab(ctk.CTkFrame):
             self.cfg.new_desktop = mode.lower().startswith("new")
             self.cfg.non_graphical = non_graphical
             self.session.cfg = self.cfg
-            self.session.connect(
-                project=project,
-                design=design,
-                setup=None,
-                remove_lock_override=remove_lock_override,
-            )
+            with audit_span(
+                "HFSS_CONNECT",
+                logger=self.logger,
+                version=version,
+                mode=mode,
+                project=project or "",
+                design=design or "",
+            ):
+                self.session.connect(
+                    project=project,
+                    design=design,
+                    setup=None,
+                    remove_lock_override=remove_lock_override,
+                )
             return True
 
         def done(res):
@@ -1999,6 +2004,14 @@ class AedtLiveTab(ctk.CTkFrame):
                 return
             self._set_context_ready(False)
             self._log_timing("connect", t0, True, f"mode={mode} version={version}")
+            emit_audit(
+                "HFSS_CONNECT_OK",
+                logger=self.logger,
+                mode=mode,
+                version=version,
+                project=project or "",
+                design=design or "",
+            )
             if project and not design:
                 self._log("[OK] Connected to HFSS. Projeto aberto; selecione o design e clique em Apply Selection.")
             elif (not project) and (not design):
@@ -2239,7 +2252,16 @@ class AedtLiveTab(ctk.CTkFrame):
                 analysis_method = self._analyze_selected_setup(setup)
             if ensure_sphere:
                 sphere_method = self._ensure_required_infinite_sphere(sphere)
-            cut = self.extractor.extract_cut(req)
+            with audit_span(
+                "HFSS_PULL_CUT",
+                logger=self.logger,
+                mode=mode,
+                setup=setup,
+                sphere=sphere,
+                expression=expr,
+                primary=primary,
+            ):
+                cut = self.extractor.extract_cut(req)
             expr_requested = expr
             expr_effective = expr_requested
             fallback_note = ""
@@ -2305,6 +2327,15 @@ class AedtLiveTab(ctk.CTkFrame):
             self._cut_cache[key] = {"cut": cut}
             json_path = self._store_cut_payload(mode, cut, setup)
             self._log_timing("pull_cut", t0, True, f"mode={mode} points={len(cut.angles_deg)}")
+            emit_audit(
+                "HFSS_PULL_CUT_OK",
+                logger=self.logger,
+                mode=mode,
+                points=len(cut.angles_deg),
+                setup=setup,
+                sphere=sphere,
+                expression=expr_effective,
+            )
             self._log(f"[OK] {mode} extracted: {len(cut.angles_deg)} pts.")
             self._log(f"[OK] Exported: {json_path}")
             if fallback_note:
@@ -2407,7 +2438,16 @@ class AedtLiveTab(ctk.CTkFrame):
                 analysis_method = self._analyze_selected_setup(setup)
             if ensure_sphere:
                 sphere_method = self._ensure_required_infinite_sphere(sphere)
-            grid = self.extractor.extract_grid(req)
+            with audit_span(
+                "HFSS_PULL_3D",
+                logger=self.logger,
+                setup=setup,
+                sphere=sphere,
+                expression=expr,
+                theta_pts=int(theta_pts),
+                phi_pts=int(phi_pts),
+            ):
+                grid = self.extractor.extract_grid(req)
             theta = np.asarray(grid.theta_deg, dtype=float)
             phi = np.asarray(grid.phi_deg, dtype=float)
             raw_values = np.asarray(grid.values, dtype=float)
@@ -2469,6 +2509,13 @@ class AedtLiveTab(ctk.CTkFrame):
             }
             self._update_send_state()
             self._log_timing("pull_3d", t0, True, f"shape={shape}")
+            emit_audit(
+                "HFSS_PULL_3D_OK",
+                logger=self.logger,
+                shape=shape,
+                setup=setup,
+                sphere=sphere,
+            )
             self._log(f"[OK] 3D grid exported: {npz_path}")
             self._log(f"[OK] 3D shape: {shape}")
             self._refresh_metadata_box({"timing": f"pull_3d {(time.perf_counter() - t0) * 1000.0:.2f} ms", "shape": shape})

@@ -36,6 +36,63 @@ class SnapshotCommand:
             engine.restore_state(self._before, emit=True)
 
 
+@dataclass
+class CreatePrimitiveCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class TransformCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class BooleanCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class ImportCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class DeleteCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class RenameCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class VisibilityCommand(SnapshotCommand):
+    pass
+
+
+@dataclass
+class BoundaryCommand(SnapshotCommand):
+    pass
+
+
+_COMMAND_KIND_MAP = {
+    "create_primitive": CreatePrimitiveCommand,
+    "transform": TransformCommand,
+    "boolean": BooleanCommand,
+    "import": ImportCommand,
+    "delete": DeleteCommand,
+    "rename": RenameCommand,
+    "visibility": VisibilityCommand,
+    "boundary": BoundaryCommand,
+}
+
+
+def build_command(kind: str, label: str, action: Callable[[EngineStateProvider], None]) -> SnapshotCommand:
+    cls = _COMMAND_KIND_MAP.get(str(kind or "").strip().lower(), SnapshotCommand)
+    return cls(label=str(label), action=action)
+
+
 class CommandStack:
     def __init__(self):
         self._undo: List[Command] = []

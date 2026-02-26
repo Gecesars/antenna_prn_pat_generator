@@ -7,6 +7,7 @@ from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 
+from core.audit import audit_span, emit_audit
 from core.config.perf import NUMBA_DTYPE, USE_NUMBA
 from core.numba_kernels.integrate import trapz_python
 from core.numba_kernels.metrics_1d import metrics_cut_1d_numba, metrics_cut_1d_python
@@ -101,13 +102,28 @@ def metrics_cut_1d(
     dtype=None,
     use_numba: Optional[bool] = None,
 ) -> Dict[str, float]:
-    a, e = _prepare_inputs(angles_deg, e_lin, dtype=dtype)
-    use_nb = bool(USE_NUMBA and NUMBA_AVAILABLE) if use_numba is None else bool(use_numba and NUMBA_AVAILABLE)
-    if use_nb:
-        out = metrics_cut_1d_numba(a, e, int(span_mode), float(xdb))
-    else:
-        out = metrics_cut_1d_python(a, e, int(span_mode), float(xdb))
-    return _metrics_tuple_to_dict(out, points=int(a.size), span_mode=int(span_mode))
+    with audit_span(
+        "METRICS_CUT_1D",
+        logger=LOGGER,
+        span_mode=int(span_mode),
+        xdb=float(xdb),
+    ):
+        a, e = _prepare_inputs(angles_deg, e_lin, dtype=dtype)
+        use_nb = bool(USE_NUMBA and NUMBA_AVAILABLE) if use_numba is None else bool(use_numba and NUMBA_AVAILABLE)
+        if use_nb:
+            out = metrics_cut_1d_numba(a, e, int(span_mode), float(xdb))
+        else:
+            out = metrics_cut_1d_python(a, e, int(span_mode), float(xdb))
+        result = _metrics_tuple_to_dict(out, points=int(a.size), span_mode=int(span_mode))
+        emit_audit(
+            "METRICS_CUT_1D_OK",
+            logger=LOGGER,
+            points=int(a.size),
+            use_numba=int(use_nb),
+            peak_db=float(result.get("peak_db", float("nan"))),
+            hpbw_deg=float(result.get("hpbw_deg", float("nan"))),
+        )
+        return result
 
 
 def hpbw_cut_1d(angles_deg, e_lin, xdb: float = 3.0, dtype=None, use_numba: Optional[bool] = None) -> float:
@@ -121,26 +137,42 @@ def directivity_2d_cut(angles_deg, e_lin, span_mode: int, dtype=None, use_numba:
 
 
 def smart_decimate_indices(angles_deg, values, target_rows: int, use_numba: Optional[bool] = None) -> np.ndarray:
-    a = np.ascontiguousarray(np.asarray(angles_deg, dtype=np.float64).reshape(-1))
-    v = np.ascontiguousarray(np.asarray(values, dtype=np.float64).reshape(-1))
-    if a.size != v.size:
-        raise ValueError("angles_deg and values must have same length.")
-    use_nb = bool(USE_NUMBA and NUMBA_AVAILABLE) if use_numba is None else bool(use_numba and NUMBA_AVAILABLE)
-    if use_nb:
-        idx = smart_decimate_indices_numba(a, v, int(target_rows))
-    else:
-        idx = smart_decimate_indices_python(a, v, int(target_rows))
-    return np.asarray(idx, dtype=np.int32)
+    with audit_span(
+        "METRICS_DECIMATE",
+        logger=LOGGER,
+        target_rows=int(target_rows),
+    ):
+        a = np.ascontiguousarray(np.asarray(angles_deg, dtype=np.float64).reshape(-1))
+        v = np.ascontiguousarray(np.asarray(values, dtype=np.float64).reshape(-1))
+        if a.size != v.size:
+            raise ValueError("angles_deg and values must have same length.")
+        use_nb = bool(USE_NUMBA and NUMBA_AVAILABLE) if use_numba is None else bool(use_numba and NUMBA_AVAILABLE)
+        if use_nb:
+            idx = smart_decimate_indices_numba(a, v, int(target_rows))
+        else:
+            idx = smart_decimate_indices_python(a, v, int(target_rows))
+        out = np.asarray(idx, dtype=np.int32)
+        emit_audit(
+            "METRICS_DECIMATE_OK",
+            logger=LOGGER,
+            points=int(a.size),
+            out_points=int(out.size),
+            use_numba=int(use_nb),
+        )
+        return out
 
 
 def integrate_power_numpy(angles_deg, e_lin) -> float:
-    a, e = _prepare_inputs(angles_deg, e_lin, dtype=np.float64)
-    emax = float(np.max(np.abs(e)))
-    if emax <= 1e-30:
-        return float("nan")
-    p = (np.abs(e) / emax) ** 2
-    rad = np.deg2rad(a.astype(np.float64))
-    return float(trapz_python(rad, p.astype(np.float64)))
+    with audit_span("METRICS_INTEGRATE_POWER", logger=LOGGER):
+        a, e = _prepare_inputs(angles_deg, e_lin, dtype=np.float64)
+        emax = float(np.max(np.abs(e)))
+        if emax <= 1e-30:
+            return float("nan")
+        p = (np.abs(e) / emax) ** 2
+        rad = np.deg2rad(a.astype(np.float64))
+        val = float(trapz_python(rad, p.astype(np.float64)))
+        emit_audit("METRICS_INTEGRATE_POWER_OK", logger=LOGGER, points=int(a.size), value=val)
+        return val
 
 
 def start_numba_warmup_thread(
@@ -171,4 +203,3 @@ def start_numba_warmup_thread(
 
     threading.Thread(target=_run, daemon=True, name="eftx-numba-warmup").start()
     return True
-

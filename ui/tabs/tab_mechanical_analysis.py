@@ -1081,7 +1081,10 @@ class MechanicalAnalysisTab(ctk.CTkFrame):
                 "pip install pyside6 pyvista pyvistaqt vtk numpy",
             )
             return
+        runtime_json = self._write_runtime_payload_for_modeler()
         cmd = [sys.executable, "-m", "mech.ui"]
+        if runtime_json:
+            cmd.extend(["--runtime-json", runtime_json])
         try:
             subprocess.Popen(cmd, cwd=os.getcwd())
             self._set_status("Modeler Pro (PySide6) iniciado.")
@@ -1090,6 +1093,37 @@ class MechanicalAnalysisTab(ctk.CTkFrame):
                 "Falha ao abrir Modeler Pro",
                 f"Nao foi possivel iniciar o modulo PySide6.\n\nComando: {' '.join(cmd)}\n\nErro: {e}",
             )
+
+    @staticmethod
+    def _json_safe(value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (np.floating,)):
+            return float(value)
+        if isinstance(value, (np.integer,)):
+            return int(value)
+        if isinstance(value, dict):
+            return {str(k): MechanicalAnalysisTab._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [MechanicalAnalysisTab._json_safe(v) for v in value]
+        return value
+
+    def _write_runtime_payload_for_modeler(self) -> str:
+        payload = self._last_cad_payload_runtime
+        if not isinstance(payload, dict):
+            return ""
+        try:
+            safe_payload = self._json_safe(payload)
+            out_dir = os.path.join(os.getcwd(), "out")
+            os.makedirs(out_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(out_dir, f"mechanical_runtime_{stamp}.json")
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(safe_payload, f, ensure_ascii=False, indent=2)
+            return path
+        except Exception as e:
+            self._set_status(f"Aviso: falha ao serializar payload para Modeler Pro: {e}")
+            return ""
 
     def _refresh_object_tree(self):
         selected = set(self.obj_tree.selection())

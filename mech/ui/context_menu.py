@@ -14,6 +14,7 @@ class ContextInfo:
     mouse_pos: Optional[QPoint] = None
     global_pos: Optional[QPoint] = None
     picked_object_id: Optional[str] = None
+    picked_cell_id: Optional[int] = None
     selected_ids: List[str] = field(default_factory=list)
     tool_mode: str = "Select"
     picked_point_3d: Optional[tuple] = None
@@ -89,6 +90,7 @@ class ContextMenuDispatcher:
         self._add_action(m_rm, "Solid", lambda: self._call("action_set_render_mode", "solid"))
         self._add_action(m_rm, "Wireframe", lambda: self._call("action_set_render_mode", "wireframe"))
         self._add_action(m_rm, "Solid + Edges", lambda: self._call("action_set_render_mode", "solid_edges"))
+        self._add_action(m_rm, "X-Ray", lambda: self._call("action_set_visual_preset", "X-Ray"))
         m_bg = m_view.addMenu("Background")
         self._add_action(m_bg, "Dark", lambda: self._call("action_set_background", "dark"))
         self._add_action(m_bg, "Light", lambda: self._call("action_set_background", "light"))
@@ -100,6 +102,7 @@ class ContextMenuDispatcher:
         self._add_action(p, "Cylinder...", lambda: self._call("action_create_primitive_dialog", "cylinder"))
         self._add_action(p, "Sphere...", lambda: self._call("action_create_primitive_dialog", "sphere"))
         self._add_action(p, "Cone...", lambda: self._call("action_create_primitive_dialog", "cone"))
+        self._add_action(p, "Tube...", lambda: self._call("action_create_primitive_dialog", "tube"))
         self._add_action(p, "Plane...", lambda: self._call("action_create_primitive_dialog", "plane"))
         self._add_action(m_create, "Create Marker...", lambda: self._call("action_add_marker_at_cursor", ctx))
 
@@ -119,6 +122,7 @@ class ContextMenuDispatcher:
         m_tm = m_tools.addMenu("Enter Tool Mode")
         for mode in ["Select", "Move", "Rotate", "Scale", "Measure"]:
             self._add_action(m_tm, mode, lambda _c=False, m=mode: self._call("action_set_tool_mode", m))
+        self._add_action(m_tools, "Backend Diagnostics...", lambda: self._call("action_backend_diagnostics"))
         self._add_action(m_tools, "Preferences...", lambda: self._call("action_open_preferences"))
 
         self._add_undo_redo(menu)
@@ -140,6 +144,14 @@ class ContextMenuDispatcher:
         self._add_action(m_tr, "Move...", lambda: self._call("action_transform_dialog", "move", [target]))
         self._add_action(m_tr, "Rotate...", lambda: self._call("action_transform_dialog", "rotate", [target]))
         self._add_action(m_tr, "Scale...", lambda: self._call("action_transform_dialog", "scale", [target]))
+        m_sub = m_tr.addMenu("Face/Edge Adjust")
+        self._add_action(m_sub, "Pick Mode: Object", lambda: self._call("action_set_subselection_mode", "Object"))
+        self._add_action(m_sub, "Pick Mode: Face", lambda: self._call("action_set_subselection_mode", "Face"))
+        self._add_action(m_sub, "Pick Mode: Edge", lambda: self._call("action_set_subselection_mode", "Edge"))
+        self._add_action(m_sub, "Face +offset", lambda: self._call("action_adjust_selected_face", +1.0))
+        self._add_action(m_sub, "Face -offset", lambda: self._call("action_adjust_selected_face", -1.0))
+        self._add_action(m_sub, "Edge +offset", lambda: self._call("action_adjust_selected_edge", +1.0))
+        self._add_action(m_sub, "Edge -offset", lambda: self._call("action_adjust_selected_edge", -1.0))
         m_align = m_tr.addMenu("Align")
         self._add_action(m_align, "Align to World Axes", lambda: self._call("action_align_world", [target]))
         self._add_action(m_align, "Align to Plane...", lambda: self._call("action_align_plane_dialog", [target]))
@@ -155,6 +167,11 @@ class ContextMenuDispatcher:
         self._add_action(m_edit, "Set Color...", lambda: self._call("action_set_color_dialog", [target]))
         self._add_action(m_edit, "Set Opacity...", lambda: self._call("action_set_opacity_dialog", [target]))
         self._add_action(m_edit, "Lock/Unlock", lambda: self._call("action_toggle_lock", [target]))
+        m_layer = menu.addMenu("Layer")
+        self._add_action(m_layer, "Assign selected...", lambda: self._call("action_assign_selected_layer", [target]))
+        self._add_action(m_layer, "New layer...", lambda: self._call("action_new_layer"))
+        self._add_action(m_layer, "Toggle layer visibility", lambda: self._call("action_toggle_layer_visibility", [target]))
+        self._add_action(m_layer, "Layer color...", lambda: self._call("action_set_layer_color", [target]))
 
         m_bool = menu.addMenu("Boolean")
         self._add_action(
@@ -188,6 +205,22 @@ class ContextMenuDispatcher:
         self._add_action(m_mea, "Compute Centroid", lambda: self._call("action_measure_centroid", [target]))
         self._add_action(m_mea, "Measure Distance...", lambda: self._call("action_enter_measure_mode", "distance"))
         self._add_action(m_mea, "Measure Angle...", lambda: self._call("action_enter_measure_mode", "angle"))
+        self._add_action(m_mea, "Validate Shape", lambda: self._call("action_validate_selected", [target]))
+        self._add_action(
+            m_mea,
+            "Heal Shape",
+            lambda: self._call("action_heal_selected", [target]),
+            enabled=bool(self.page.engine.backend_has("heal_available")),
+            tooltip="Available when FreeCAD kernel heal capability is enabled.",
+        )
+
+        m_bc = menu.addMenu("Boundaries")
+        self._add_action(m_bc, "Apply Fixed Support", lambda: self._call("action_apply_boundary_quick", "fixed", ctx))
+        self._add_action(m_bc, "Apply Force...", lambda: self._call("action_apply_boundary_quick", "force", ctx))
+        self._add_action(m_bc, "Apply Pressure...", lambda: self._call("action_apply_boundary_quick", "pressure", ctx))
+        self._add_action(m_bc, "Apply Symmetry", lambda: self._call("action_apply_boundary_quick", "symmetry", ctx))
+        self._add_action(m_bc, "Boundary Summary", lambda: self._call("action_show_boundary_summary", [target]))
+        self._add_action(m_bc, "Clear Boundaries on Selected", lambda: self._call("action_clear_boundaries_selected"))
 
         m_mark = menu.addMenu("Markers")
         self._add_action(m_mark, "Add Marker at Pick Point", lambda: self._call("action_add_marker_at_cursor", ctx))
@@ -195,8 +228,10 @@ class ContextMenuDispatcher:
         self._add_action(m_mark, "Add Custom Math Marker...", lambda: self._call("action_add_custom_math_marker", ctx))
 
         m_exp = menu.addMenu("Export")
+        self._add_action(m_exp, "Export Selected as STEP...", lambda: self._call("action_export_selected", "step"))
         self._add_action(m_exp, "Export Selected as STL...", lambda: self._call("action_export_selected", "stl"))
         self._add_action(m_exp, "Export Selected as OBJ/PLY...", lambda: self._call("action_export_selected", "obj"))
+        self._add_action(menu, "Open Analysis Tab", lambda: self._call("action_open_selected_analysis_tab", [target]))
 
         m_dz = menu.addMenu("Danger Zone")
         self._add_action(m_dz, "Delete Selected", lambda: self._call("action_delete_selected"))
@@ -249,12 +284,27 @@ class ContextMenuDispatcher:
             self._add_action(menu, "Duplicate", lambda: self._call("action_duplicate", [oid]))
             self._add_action(menu, "Delete", lambda: self._call("action_delete_selected"))
             self._add_action(menu, "Color/Opacity...", lambda: self._call("action_style_dialog", [oid]))
-            self._add_action(menu, "Export...", lambda: self._call("action_export_selected", "obj"))
+            m_layer = menu.addMenu("Layer")
+            self._add_action(m_layer, "Assign selected...", lambda: self._call("action_assign_selected_layer", [oid]))
+            self._add_action(m_layer, "New layer...", lambda: self._call("action_new_layer"))
+            self._add_action(m_layer, "Toggle layer visibility", lambda: self._call("action_toggle_layer_visibility", [oid]))
+            self._add_action(m_layer, "Layer color...", lambda: self._call("action_set_layer_color", [oid]))
+            m_bc = menu.addMenu("Boundaries")
+            self._add_action(m_bc, "Fixed Support", lambda: self._call("action_apply_boundary_quick", "fixed"))
+            self._add_action(m_bc, "Force...", lambda: self._call("action_apply_boundary_quick", "force"))
+            self._add_action(m_bc, "Pressure...", lambda: self._call("action_apply_boundary_quick", "pressure"))
+            self._add_action(m_bc, "Summary", lambda: self._call("action_show_boundary_summary", [oid]))
+            self._add_action(m_bc, "Clear on Selected", lambda: self._call("action_clear_boundaries_selected"))
+            m_exp = menu.addMenu("Export")
+            self._add_action(m_exp, "STEP...", lambda: self._call("action_export_selected", "step"))
+            self._add_action(m_exp, "STL...", lambda: self._call("action_export_selected", "stl"))
+            self._add_action(m_exp, "OBJ...", lambda: self._call("action_export_selected", "obj"))
             m_mea = menu.addMenu("Measurements")
             self._add_action(m_mea, "BBox", lambda: self._call("action_measure_bbox", [oid]))
             self._add_action(m_mea, "Area", lambda: self._call("action_measure_area", [oid]))
             self._add_action(m_mea, "Volume", lambda: self._call("action_measure_volume", [oid]))
             self._add_action(m_mea, "Centroid", lambda: self._call("action_measure_centroid", [oid]))
+            self._add_action(menu, "Open Analysis Tab", lambda: self._call("action_open_selected_analysis_tab", [oid]))
             m_mark = menu.addMenu("Add Marker")
             self._add_action(m_mark, "Marker no centroide", lambda: self._call("action_marker_centroid", oid))
             self._add_action(m_mark, "Label com nome", lambda: self._call("action_label_centroid", oid))

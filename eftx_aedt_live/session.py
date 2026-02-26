@@ -15,6 +15,7 @@ import traceback
 import threading
 import time
 
+from core.audit import audit_span, emit_audit
 from .psutil_shim import create_psutil_shim_module
 
 
@@ -963,123 +964,140 @@ class AedtHfssSession:
           RuntimeError on connection failures.
         """
         with self._lock:
-            project = self._norm_project(project)
-            design = str(design).strip() if design else None
-            remove_lock = bool(self.cfg.remove_lock) if remove_lock_override is None else bool(remove_lock_override)
+            with audit_span(
+                "HFSS_SESSION_CONNECT",
+                version=self.cfg.version,
+                project=project or "",
+                design=design or "",
+                setup=setup or "",
+                force=int(bool(force)),
+            ):
+                project = self._norm_project(project)
+                design = str(design).strip() if design else None
+                remove_lock = bool(self.cfg.remove_lock) if remove_lock_override is None else bool(remove_lock_override)
 
-            if self._hfss is not None and not force:
-                current_project = self._norm_project(getattr(self._hfss, "project_file", None)) or self._norm_project(getattr(self._hfss, "project_name", None)) or self._norm_project(self._last_project)
-                current_design = str(getattr(self._hfss, "design_name", "") or self._last_design or "").strip() or None
-                same_project = self._project_matches(current_project, project)
-                same_design = (not design) or (current_design == design)
-                if same_project and same_design:
-                    _patch_desktop_compat(self._hfss)
-                    return
+                if self._hfss is not None and not force:
+                    current_project = self._norm_project(getattr(self._hfss, "project_file", None)) or self._norm_project(getattr(self._hfss, "project_name", None)) or self._norm_project(self._last_project)
+                    current_design = str(getattr(self._hfss, "design_name", "") or self._last_design or "").strip() or None
+                    same_project = self._project_matches(current_project, project)
+                    same_design = (not design) or (current_design == design)
+                    if same_project and same_design:
+                        _patch_desktop_compat(self._hfss)
+                        return
 
-            if self._hfss is not None:
-                try:
-                    self._hfss.release_desktop(close_projects=False, close_desktop=False)
-                except Exception:
+                if self._hfss is not None:
                     try:
-                        self._hfss.close_project(save_project=False)
+                        self._hfss.release_desktop(close_projects=False, close_desktop=False)
                     except Exception:
-                        pass
-                finally:
-                    self._hfss = None
+                        try:
+                            self._hfss.close_project(save_project=False)
+                        except Exception:
+                            pass
+                    finally:
+                        self._hfss = None
 
-            _prepare_windows_dll_resolution(self.cfg.version)
-            Hfss = _import_hfss(self.cfg.version)
-            _force_pyaedt_single_desktop_mode()
-            _patch_pyaedt_solution_constants()
+                _prepare_windows_dll_resolution(self.cfg.version)
+                Hfss = _import_hfss(self.cfg.version)
+                _force_pyaedt_single_desktop_mode()
+                _patch_pyaedt_solution_constants()
 
-            # Normalize paths (optional).
-            if project:
-                p = Path(project)
-                if p.suffix.lower() == ".aedt" and p.exists():
-                    project = str(p)
+                # Normalize paths (optional).
+                if project:
+                    p = Path(project)
+                    if p.suffix.lower() == ".aedt" and p.exists():
+                        project = str(p)
 
-            # New desktop only on first connect when requested.
-            new_desktop = bool(self.cfg.new_desktop and not self._ever_connected)
-            attach_pid = self.cfg.aedt_process_id
-            attach_port = int(self.cfg.port or 0)
-            call_non_graphical = bool(self.cfg.non_graphical)
-            if not new_desktop:
-                if attach_pid:
-                    picked = self._pick_attach_target(
-                        student_version=self.cfg.student_version,
-                        non_graphical=self.cfg.non_graphical,
-                        allow_fallback=True,
-                    )
-                    if picked and int(picked.get("pid", 0)) == int(attach_pid) and int(picked.get("port", 0)) > 0 and attach_port <= 0:
-                        attach_port = int(picked.get("port", 0))
-                else:
-                    picked = self._pick_attach_target(
-                        student_version=self.cfg.student_version,
-                        non_graphical=self.cfg.non_graphical,
-                        allow_fallback=False,
-                    )
-                    if picked is None:
-                        # No strict mode match available. Fall back to any running
-                        # AEDT session and align non_graphical with the chosen target.
+                # New desktop only on first connect when requested.
+                new_desktop = bool(self.cfg.new_desktop and not self._ever_connected)
+                attach_pid = self.cfg.aedt_process_id
+                attach_port = int(self.cfg.port or 0)
+                call_non_graphical = bool(self.cfg.non_graphical)
+                if not new_desktop:
+                    if attach_pid:
                         picked = self._pick_attach_target(
                             student_version=self.cfg.student_version,
-                            non_graphical=None,
+                            non_graphical=self.cfg.non_graphical,
                             allow_fallback=True,
                         )
-                        if picked is not None:
-                            call_non_graphical = bool(picked.get("is_ng"))
-                    if picked:
-                        attach_pid = int(picked.get("pid", 0)) or None
-                        if attach_port <= 0:
-                            attach_port = int(picked.get("port", 0) or 0)
-            port_to_use = int(attach_port if (not new_desktop and attach_port > 0) else int(self.cfg.port or 0))
+                        if picked and int(picked.get("pid", 0)) == int(attach_pid) and int(picked.get("port", 0)) > 0 and attach_port <= 0:
+                            attach_port = int(picked.get("port", 0))
+                    else:
+                        picked = self._pick_attach_target(
+                            student_version=self.cfg.student_version,
+                            non_graphical=self.cfg.non_graphical,
+                            allow_fallback=False,
+                        )
+                        if picked is None:
+                            # No strict mode match available. Fall back to any running
+                            # AEDT session and align non_graphical with the chosen target.
+                            picked = self._pick_attach_target(
+                                student_version=self.cfg.student_version,
+                                non_graphical=None,
+                                allow_fallback=True,
+                            )
+                            if picked is not None:
+                                call_non_graphical = bool(picked.get("is_ng"))
+                        if picked:
+                            attach_pid = int(picked.get("pid", 0)) or None
+                            if attach_port <= 0:
+                                attach_port = int(picked.get("port", 0) or 0)
+                port_to_use = int(attach_port if (not new_desktop and attach_port > 0) else int(self.cfg.port or 0))
 
-            def _open(version_value):
-                return Hfss(
-                    project=project,
-                    design=design,
-                    setup=setup,
-                    version=version_value,
-                    non_graphical=call_non_graphical,
-                    new_desktop=new_desktop,
-                    close_on_exit=self.cfg.close_on_exit,
-                    student_version=self.cfg.student_version,
-                    machine=self.cfg.machine,
-                    port=port_to_use,
-                    aedt_process_id=attach_pid,
-                    remove_lock=remove_lock,
-                )
+                def _open(version_value):
+                    return Hfss(
+                        project=project,
+                        design=design,
+                        setup=setup,
+                        version=version_value,
+                        non_graphical=call_non_graphical,
+                        new_desktop=new_desktop,
+                        close_on_exit=self.cfg.close_on_exit,
+                        student_version=self.cfg.student_version,
+                        machine=self.cfg.machine,
+                        port=port_to_use,
+                        aedt_process_id=attach_pid,
+                        remove_lock=remove_lock,
+                    )
 
-            def _open_no_project(version_value):
-                return Hfss(
-                    project=None,
-                    design=None,
-                    setup=setup,
-                    version=version_value,
-                    non_graphical=call_non_graphical,
-                    new_desktop=new_desktop,
-                    close_on_exit=self.cfg.close_on_exit,
-                    student_version=self.cfg.student_version,
-                    machine=self.cfg.machine,
-                    port=port_to_use,
-                    aedt_process_id=attach_pid,
-                    remove_lock=remove_lock,
-                )
+                def _open_no_project(version_value):
+                    return Hfss(
+                        project=None,
+                        design=None,
+                        setup=setup,
+                        version=version_value,
+                        non_graphical=call_non_graphical,
+                        new_desktop=new_desktop,
+                        close_on_exit=self.cfg.close_on_exit,
+                        student_version=self.cfg.student_version,
+                        machine=self.cfg.machine,
+                        port=port_to_use,
+                        aedt_process_id=attach_pid,
+                        remove_lock=remove_lock,
+                    )
 
-            opened_via_fallback = False
-            try:
-                self._hfss = _open(self.cfg.version)
-                _patch_desktop_compat(self._hfss)
-            except Exception as e_first:
-                msg_first = str(e_first)
+                opened_via_fallback = False
+                try:
+                    self._hfss = _open(self.cfg.version)
+                    _patch_desktop_compat(self._hfss)
+                except Exception as e_first:
+                    msg_first = str(e_first)
 
-                if project and ("OpenProject" in msg_first or "project" in msg_first.lower()):
-                    try:
-                        self._hfss = _open_no_project(self.cfg.version)
-                        _patch_desktop_compat(self._hfss)
-                        self._open_project_context(self._hfss, project=project, design=design)
-                        opened_via_fallback = True
-                    except Exception:
+                    if project and ("OpenProject" in msg_first or "project" in msg_first.lower()):
+                        try:
+                            self._hfss = _open_no_project(self.cfg.version)
+                            _patch_desktop_compat(self._hfss)
+                            self._open_project_context(self._hfss, project=project, design=design)
+                            opened_via_fallback = True
+                        except Exception:
+                            try:
+                                if self._hfss is not None:
+                                    self._hfss.release_desktop(close_projects=False, close_desktop=False)
+                            except Exception:
+                                pass
+                            finally:
+                                self._hfss = None
+
+                    if (not opened_via_fallback) and ("PyDesktopPlugin.dll" not in msg_first):
                         try:
                             if self._hfss is not None:
                                 self._hfss.release_desktop(close_projects=False, close_desktop=False)
@@ -1087,62 +1105,60 @@ class AedtHfssSession:
                             pass
                         finally:
                             self._hfss = None
-
-                if (not opened_via_fallback) and ("PyDesktopPlugin.dll" not in msg_first):
-                    try:
-                        if self._hfss is not None:
-                            self._hfss.release_desktop(close_projects=False, close_desktop=False)
-                    except Exception:
-                        pass
-                    finally:
-                        self._hfss = None
-                    raise RuntimeError(
-                        f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first} "
-                        f"| psutil_backend={_PSUTIL_BACKEND}"
-                    ) from e_first
-
-                if not opened_via_fallback:
-                    retry_errors: list[str] = []
-                    try_versions = []
-                    if new_desktop:
-                        token = _version_to_token(self.cfg.version)
-                        if token and token != str(self.cfg.version).strip():
-                            try_versions.append(token)
-                        try_versions.append(None)
-
-                    for v_try in try_versions:
-                        try:
-                            _prepare_windows_dll_resolution(self.cfg.version if v_try is None else str(v_try))
-                            self._hfss = _open(v_try)
-                            _patch_desktop_compat(self._hfss)
-                            break
-                        except Exception as e_retry:
-                            self._hfss = None
-                            retry_errors.append(f"version={v_try!r}: {e_retry}")
-
-                    if self._hfss is None:
-                        roots = [str(p) for p in _discover_aedt_roots(self.cfg.version)]
-                        help_msg = (
-                            "Falha ao carregar dependencias nativas do AEDT (PyDesktopPlugin.dll). "
-                            f"Versao solicitada: {self.cfg.version!r}. "
-                            f"Raizes AEDT detectadas: {roots or ['<nenhuma>']}."
-                        )
-                        if retry_errors:
-                            help_msg += " Retries: " + " | ".join(retry_errors)
-                        elif not new_desktop:
-                            help_msg += (
-                                " Attach mode: retries were skipped intentionally "
-                                "to avoid opening multiple AEDT instances."
-                            )
                         raise RuntimeError(
-                            f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first}. {help_msg} "
+                            f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first} "
                             f"| psutil_backend={_PSUTIL_BACKEND}"
                         ) from e_first
 
-            self._connected_at = time.time()
-            self._last_project = project
-            self._last_design = design
-            self._ever_connected = True
+                    if not opened_via_fallback:
+                        retry_errors: list[str] = []
+                        try_versions = []
+                        if new_desktop:
+                            token = _version_to_token(self.cfg.version)
+                            if token and token != str(self.cfg.version).strip():
+                                try_versions.append(token)
+                            try_versions.append(None)
+
+                        for v_try in try_versions:
+                            try:
+                                _prepare_windows_dll_resolution(self.cfg.version if v_try is None else str(v_try))
+                                self._hfss = _open(v_try)
+                                _patch_desktop_compat(self._hfss)
+                                break
+                            except Exception as e_retry:
+                                self._hfss = None
+                                retry_errors.append(f"version={v_try!r}: {e_retry}")
+
+                        if self._hfss is None:
+                            roots = [str(p) for p in _discover_aedt_roots(self.cfg.version)]
+                            help_msg = (
+                                "Falha ao carregar dependencias nativas do AEDT (PyDesktopPlugin.dll). "
+                                f"Versao solicitada: {self.cfg.version!r}. "
+                                f"Raizes AEDT detectadas: {roots or ['<nenhuma>']}."
+                            )
+                            if retry_errors:
+                                help_msg += " Retries: " + " | ".join(retry_errors)
+                            elif not new_desktop:
+                                help_msg += (
+                                    " Attach mode: retries were skipped intentionally "
+                                    "to avoid opening multiple AEDT instances."
+                                )
+                            raise RuntimeError(
+                                f"Failed to connect to AEDT/HFSS via PyAEDT: {e_first}. {help_msg} "
+                                f"| psutil_backend={_PSUTIL_BACKEND}"
+                            ) from e_first
+
+                self._connected_at = time.time()
+                self._last_project = project
+                self._last_design = design
+                self._ever_connected = True
+                emit_audit(
+                    "HFSS_SESSION_CONNECT_OK",
+                    version=self.cfg.version,
+                    project=project or "",
+                    design=design or "",
+                    setup=setup or "",
+                )
 
     def reconnect_last(self):
         """Reconnect using the last project/design."""
@@ -1162,6 +1178,7 @@ class AedtHfssSession:
             if self._hfss is None:
                 return
             try:
+                emit_audit("HFSS_SESSION_DISCONNECT_START", project=self._last_project or "", design=self._last_design or "")
                 self._hfss.release_desktop(close_projects=False, close_desktop=self.cfg.close_on_exit)
             except Exception:
                 # Fallback: older PyAEDT versions may use different shutdown semantics.
@@ -1172,3 +1189,4 @@ class AedtHfssSession:
             finally:
                 self._hfss = None
                 self._connected_at = None
+                emit_audit("HFSS_SESSION_DISCONNECT_OK", project=self._last_project or "", design=self._last_design or "")

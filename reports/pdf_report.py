@@ -8,6 +8,7 @@ import math
 import os
 import re
 import tempfile
+import time
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -18,6 +19,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas as rl_canvas
 from reportlab.platypus import Paragraph, Table, TableStyle
 
+from core.audit import emit_audit
 from . import layout
 from .merge_template import apply_template_underlay
 from .metrics import metrics_items_from_dict, split_metrics_columns
@@ -349,6 +351,15 @@ def export_report_pdf(
     One page is generated for each cut in payload["pages"].
     """
     log = logger or logging.getLogger(__name__)
+    t_start = time.perf_counter()
+    emit_audit(
+        "EXPORT_REPORT_PDF_START",
+        logger=log,
+        output_pdf=output_pdf_path,
+        template_pdf=template_pdf_path,
+        save_full_csv=int(bool(save_full_csv)),
+        max_rows=int(max_display_rows),
+    )
     pages = payload.get("pages", []) if isinstance(payload, Mapping) else []
     if not isinstance(pages, Sequence) or not pages:
         raise ReportExportError("Report payload has no pages.")
@@ -433,6 +444,7 @@ def export_report_pdf(
     glossary_pages = 0
 
     for idx, page in enumerate(pages, start=1):
+        page_t0 = time.perf_counter()
         if callable(cancel_check) and cancel_check():
             raise ReportCancelled("Report export cancelled by user.")
         if callable(progress_cb):
@@ -580,6 +592,16 @@ def export_report_pdf(
             note_para.drawOn(canv, safe.left, y_after_table - 3.5 - note_h)
 
         canv.showPage()
+        emit_audit(
+            "REPORT_PAGE_BUILT",
+            logger=log,
+            index=int(idx),
+            title=page_title,
+            rows_full=int(len(rows_full)),
+            rows_pdf=int(len(rows_disp)),
+            compacted=int(bool(compacted)),
+            elapsed_ms=round((time.perf_counter() - page_t0) * 1000.0, 3),
+        )
 
     if glossary_entries:
         remaining = list(glossary_entries)
@@ -641,5 +663,13 @@ def export_report_pdf(
         "output_pages": total_pages + glossary_pages,
         "dpi": dpi,
     }
+    emit_audit(
+        "EXPORT_REPORT_PDF_OK",
+        logger=log,
+        output_pdf=output_pdf_path,
+        pages=int(total_pages),
+        glossary_pages=int(glossary_pages),
+        elapsed_ms=round((time.perf_counter() - t_start) * 1000.0, 3),
+    )
     log.info("Report PDF exported: %s (pages=%s)", output_pdf_path, total_pages)
     return result

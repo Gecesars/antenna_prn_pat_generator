@@ -138,6 +138,55 @@ def create_cone(radius: float, height: float, segments: int = 32, center=(0.0, 0
     return MeshData(vertices=vertices, faces=np.asarray(faces, dtype=int))
 
 
+def create_tube(
+    outer_radius: float,
+    inner_radius: float,
+    height: float,
+    segments: int = 48,
+    center=(0.0, 0.0, 0.0),
+) -> MeshData:
+    ro = max(1e-9, _safe_float(outer_radius, 0.6))
+    ri = max(1e-9, _safe_float(inner_radius, 0.3))
+    if ri >= ro:
+        ri = ro * 0.5
+    h = max(1e-9, _safe_float(height, 1.0))
+    n = max(12, int(segments))
+    cx, cy, cz = [float(x) for x in center]
+    top_z = cz + h * 0.5
+    bot_z = cz - h * 0.5
+
+    ang = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    top_outer = np.column_stack([cx + ro * np.cos(ang), cy + ro * np.sin(ang), np.full(n, top_z)])
+    bot_outer = np.column_stack([cx + ro * np.cos(ang), cy + ro * np.sin(ang), np.full(n, bot_z)])
+    top_inner = np.column_stack([cx + ri * np.cos(ang), cy + ri * np.sin(ang), np.full(n, top_z)])
+    bot_inner = np.column_stack([cx + ri * np.cos(ang), cy + ri * np.sin(ang), np.full(n, bot_z)])
+
+    vertices = np.vstack([top_outer, bot_outer, top_inner, bot_inner]).astype(float)
+
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        to_i, to_j = i, j
+        bo_i, bo_j = n + i, n + j
+        ti_i, ti_j = 2 * n + i, 2 * n + j
+        bi_i, bi_j = 3 * n + i, 3 * n + j
+
+        # outer side
+        faces.append([to_i, to_j, bo_j])
+        faces.append([to_i, bo_j, bo_i])
+        # inner side (reverse winding)
+        faces.append([ti_i, bi_j, ti_j])
+        faces.append([ti_i, bi_i, bi_j])
+        # top annulus
+        faces.append([to_i, ti_i, ti_j])
+        faces.append([to_i, ti_j, to_j])
+        # bottom annulus
+        faces.append([bo_i, bo_j, bi_j])
+        faces.append([bo_i, bi_j, bi_i])
+
+    return MeshData(vertices=vertices, faces=np.asarray(faces, dtype=int))
+
+
 def create_sphere(radius: float, theta_res: int = 24, phi_res: int = 24, center=(0.0, 0.0, 0.0)) -> MeshData:
     r = max(1e-9, _safe_float(radius, 0.5))
     nt = max(8, int(theta_res))

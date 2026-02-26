@@ -46,3 +46,4 @@ ENV/
 *.log
 out/wix_tmp/
 out/*.msi
+out/*.rar
