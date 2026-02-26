@@ -4,8 +4,11 @@ import pytest
 
 from core.divider_aedt import (
     DividerGeometryError,
+    _extract_s11_metrics_from_hfss,
     _alt_hfss_constructor_kwargs,
     _build_hfss_constructor_kwargs,
+    _normalize_project_target,
+    compute_s11_metrics,
     compute_coaxial_divider_geometry,
 )
 
@@ -123,3 +126,69 @@ def test_alt_hfss_constructor_kwargs_switches_project_design_names():
     assert alt_new["design"] == "D"
     assert "projectname" not in alt_new
     assert "designname" not in alt_new
+
+
+def test_compute_s11_metrics_returns_expected_arrays():
+    s11 = [0.1 + 0.0j, 0.2 + 0.1j, 0.0 - 0.5j]
+    out = compute_s11_metrics(s11, z0=50.0)
+    assert len(out["return_loss_db"]) == 3
+    assert len(out["impedance_ohm"]) == 3
+    assert len(out["phase_deg"]) == 3
+    assert out["return_loss_db"][0] > 0.0
+    assert out["impedance_ohm"][0] > 0.0
+
+
+def test_normalize_project_target_handles_aedt_file_and_directory(tmp_path):
+    aedt_file = tmp_path / "Divisor_Coaxial.aedt"
+    pf, pd = _normalize_project_target(str(aedt_file))
+    assert pf == str(aedt_file)
+    assert pd == str(tmp_path)
+
+    folder = tmp_path / "projects"
+    folder.mkdir()
+    pf2, pd2 = _normalize_project_target(str(folder))
+    assert pf2 == ""
+    assert pd2 == str(folder)
+
+
+def test_extract_s11_metrics_reads_y_vector_from_solution_data():
+    class _FakeSolution:
+        def __init__(self):
+            self.primary_sweep = "Freq"
+            self.units_sweeps = {"Freq": "MHz"}
+            self.primary_sweep_values = [600.0, 700.0]
+
+        def get_expression_data(self, expression=None, formula="real", **kwargs):
+            x = [600.0, 700.0]
+            if formula == "real":
+                return x, [0.1, 0.2]
+            if formula == "imag":
+                return x, [0.0, 0.0]
+            return x, [0.0, 0.0]
+
+    class _FakePost:
+        def get_solution_data(self, **kwargs):
+            return _FakeSolution()
+
+    class _FakeHfss:
+        def __init__(self):
+            self.design_name = "DivisorCoaxial"
+            self.project_path = ""
+            self.post = _FakePost()
+            self.oproject = object()
+            self._project_path = ""
+
+        def set_active_design(self, *args, **kwargs):
+            return True
+
+    out = _extract_s11_metrics_from_hfss(
+        _FakeHfss(),
+        setup_name="Setup1",
+        sweep_name="Sweep1",
+        port_name="P1",
+        project_path=r"C:\tmp\Divisor_Coaxial.aedt",
+    )
+    assert out["expression"] == "S(P1,P1)"
+    assert out["frequency"] == pytest.approx([600.0, 700.0])
+    assert out["return_loss_db"][0] == pytest.approx(20.0, rel=1e-6)
+    assert out["return_loss_db"][1] == pytest.approx(13.9794000867, rel=1e-6)
