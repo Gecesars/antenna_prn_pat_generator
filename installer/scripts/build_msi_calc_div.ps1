@@ -1,8 +1,7 @@
 param(
     [switch]$SkipBuildApp,
     [switch]$SkipHarvest,
-    [switch]$Clean,
-    [int]$Threads = 16
+    [switch]$Clean
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,29 +30,30 @@ if ($extensionsText -notmatch 'WixToolset\.UI\.wixext\s+6\.0\.2') {
 }
 
 if ($Clean) {
-    Remove-Item -Recurse -Force ".\out" -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force ".\out\Calc_Div_EFTX" -ErrorAction SilentlyContinue
+    Remove-Item -Force ".\out\Calc_Div_EFTX_1.3.0_x64.msi" -ErrorAction SilentlyContinue
+    Remove-Item -Force ".\out\Calc_Div_EFTX_1.3.1_x64.msi" -ErrorAction SilentlyContinue
 }
-New-Item -ItemType Directory -Force ".\out" | Out-Null
+New-Item -ItemType Directory -Force ".\out\Calc_Div_EFTX" | Out-Null
 
-# Force WiX to use a local writable temp directory.
-$wixTmp = (Resolve-Path ".\out").Path
+$wixTmp = (Resolve-Path ".\out\Calc_Div_EFTX").Path
 $wixTmpDir = Join-Path $wixTmp "wix_tmp"
 New-Item -ItemType Directory -Force $wixTmpDir | Out-Null
 $env:TEMP = $wixTmpDir
 $env:TMP = $wixTmpDir
 
 if (-not $SkipBuildApp) {
-    & ".\installer\scripts\build_app.ps1" -Clean:$Clean -Threads:$Threads
+    & ".\installer\scripts\build_app_calc_div.ps1" -Clean:$Clean
 }
 
 if (-not $SkipHarvest) {
-    & ".\installer\scripts\harvest_files.ps1"
+    & ".\installer\scripts\harvest_files_calc_div.ps1"
 }
 
-$distDir = Resolve-Path ".\dist\EFTX_DiagramSuite"
-$msiOut = ".\out\EFTX_DiagramSuite.msi"
+$distDir = Resolve-Path ".\dist\Calc_Div_EFTX"
+$msiOut = ".\out\Calc_Div_EFTX_1.3.1_x64.msi"
 
-& $wixExe build ".\installer\wix\Product.wxs" ".\installer\wix\Components.wxs" `
+& $wixExe build ".\installer\wix\Product_Calc_Div_EFTX.wxs" ".\installer\wix\Components_Calc_Div_EFTX.wxs" `
   -arch x64 `
   -o $msiOut `
   -d SourceDir="$distDir" `
@@ -65,4 +65,4 @@ if ($wixExit -ne 0) {
 }
 
 Write-Host ""
-Write-Host "MSI gerado em $msiOut"
+Write-Host "MSI Calc_Div_EFTX gerado em $msiOut"

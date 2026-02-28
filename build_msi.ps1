@@ -1,7 +1,8 @@
 param(
-    [switch]$Clean
+    [switch]$Clean,
+    [int]$Threads = 16
 )
 
 $ErrorActionPreference = "Stop"
 
-& ".\installer\scripts\build_msi.ps1" -Clean:$Clean
+& ".\installer\scripts\build_msi.ps1" -Clean:$Clean -Threads:$Threads

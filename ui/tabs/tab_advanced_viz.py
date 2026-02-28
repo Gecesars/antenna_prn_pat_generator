@@ -517,6 +517,8 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
                 "angles": np.asarray(item.get("angles", []), dtype=float).tolist(),
                 "values": np.asarray(item.get("values", []), dtype=float).tolist(),
                 "origin": str(item.get("origin", "")),
+                "normalize": bool(item.get("normalize", True)),
+                "allow_negative": bool(item.get("allow_negative", False)),
             }
 
         payload = {
@@ -558,11 +560,15 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
                     val = np.asarray(item.get("values", []), dtype=float).reshape(-1)
                     if ang.size == 0 or val.size == 0 or ang.size != val.size:
                         continue
+                    allow_negative = bool(item.get("allow_negative", False))
+                    normalize = bool(item.get("normalize", True))
                     self.user_sources[str(key)] = {
                         "kind": str(item.get("kind", "H")).upper(),
                         "angles": ang,
-                        "values": np.clip(val, 0.0, None),
+                        "values": val if allow_negative else np.clip(val, 0.0, None),
                         "origin": str(item.get("origin", "")),
+                        "normalize": normalize,
+                        "allow_negative": allow_negative,
                     }
 
             self.xdb_var.set(str(data.get("xdb", self.xdb_var.get())))
@@ -597,17 +603,19 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
     def refresh_sources(self, preferred_key: str = ""):
         src: Dict[str, dict] = {}
 
-        def add(name: str, kind: str, angles, values):
+        def add(name: str, kind: str, angles, values, normalize: bool = True, clip_nonnegative: bool = True):
             if angles is None or values is None:
                 return
             a = np.asarray(angles, dtype=float).reshape(-1)
             v = np.asarray(values, dtype=float).reshape(-1)
             if a.size == 0 or v.size == 0 or a.size != v.size:
                 return
-            v = np.clip(v, 0.0, None)
-            vmax = float(np.max(v))
-            if vmax > 1e-12:
-                v = v / vmax
+            if clip_nonnegative:
+                v = np.clip(v, 0.0, None)
+            if normalize:
+                vmax = float(np.max(v))
+                if vmax > 1e-12:
+                    v = v / vmax
             src[name] = {"kind": kind, "angles": a, "values": v, "sig": self._series_signature(a, v)}
 
         add("HRP Arquivo", "H", getattr(self.app, "h_angles", None), getattr(self.app, "h_vals", None))
@@ -621,7 +629,14 @@ class AdvancedVisualizationTab(ctk.CTkFrame):
 
         for key, item in list(self.user_sources.items()):
             try:
-                add(key, str(item.get("kind", "H")).upper(), item.get("angles"), item.get("values"))
+                add(
+                    key,
+                    str(item.get("kind", "H")).upper(),
+                    item.get("angles"),
+                    item.get("values"),
+                    normalize=bool(item.get("normalize", True)),
+                    clip_nonnegative=not bool(item.get("allow_negative", False)),
+                )
             except Exception:
                 continue
 

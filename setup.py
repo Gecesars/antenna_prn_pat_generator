@@ -6,14 +6,14 @@ from cx_Freeze import Executable, setup
 
 
 APP_NAME = "EFTX Antenna Converter"
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.3.0"
 APP_DESCRIPTION = "Conversor profissional de diagramas de antena (PAT/PRN/ADT)"
 APP_COMPANY = "EFTX Broadcast"
 APP_AUTHOR = "Gecesars"
 APP_URL = "https://github.com/Gecesars/antenna_prn_pat_generator"
 
 EXE_NAME = "EFTX_Converter.exe"
-MSI_NAME = "EFTX_Antenna_Converter_1.2.2_win64.msi"
+MSI_NAME = "EFTX_Antenna_Converter_1.3.0_win64.msi"
 
 # Keep this constant across releases so MSI upgrades work correctly.
 UPGRADE_CODE = "{952E3852-5953-4393-9467-336714151614}"

@@ -527,3 +527,239 @@ Stopping Batch Run: 11:03:49 AM  Feb 26, 2026
           [info] Normal completion of simulation on server: Local Machine. (10:06:24 AM  Feb 26, 2026)
 -- Message Window --
 Stopping Batch Run: 11:03:36 AM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 1:25:21 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+The project 'Divisor_Coaxial_20260226_132515' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 57784. 
+        [info] The project 'Divisor_Coaxial_20260226_132515' has been edited and/or solved. Do you want to save the changes?
+      Divisor_C-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 60260. 
+-- Message Window --
+Stopping Batch Run: 1:51:41 PM  Feb 26, 2026
+t impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (01:25:44 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (01:25:44 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (01:25:44 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (01:25:44 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.101e+01 (01:29:06 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.225e+01 (01:29:06 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (01:29:06 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.218e+01 (01:29:06 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (01:29:07 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (01:29:09 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (01:29:09 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:09 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.217e+01 (01:29:09 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:09 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (01:29:12 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:12 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:12 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (01:29:12 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:13 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (01:29:15 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:16 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.219e+01 (01:29:16 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (01:29:16 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (01:29:16 PM  Feb 26, 2026)
+          [info] Normal completion of simulation on server: Local Machine. (01:29:27 PM  Feb 26, 2026)
+-- Message Window --
+Stopping Batch Run: 1:30:06 PM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 1:56:48 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 61408. 
+-- Message Window --
+Stopping Batch Run: 1:57:46 PM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 2:06:20 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+The project 'Divisor_Coaxial' has been edited and/or solved. Do you want to save the changes?
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 50451. 
+        [info] The project 'Divisor_Coaxial' has been edited and/or solved. Do you want to save the changes?
+      Divisor_Coaxial (D:/Simulations/Simulations/#IFTX/)
+        DivisorCoaxial (Modal Network)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (02:07:23 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (02:07:23 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:23 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.217e+01 (02:07:23 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:23 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (02:07:26 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:26 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:26 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (02:07:26 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:26 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (02:07:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.219e+01 (02:07:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (02:07:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:07:29 PM  Feb 26, 2026)
+          [info] Normal completion of simulation on server: Local Machine. (02:07:41 PM  Feb 26, 2026)
+-- Message Window --
+Stopping Batch Run: 2:16:37 PM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 2:16:51 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 2:35:28 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 50799. 
+      Divisor_Coaxial_20260226_143521 (C:/Users/geral/AppData/Local/EFTX/DiagramSuite/HFSS_Projects/)
+        DivisorCoaxial (Modal Network)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (02:35:52 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (02:35:52 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (02:35:52 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (02:35:52 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.101e+01 (02:36:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.225e+01 (02:36:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (02:36:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.218e+01 (02:36:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (02:36:29 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (02:36:32 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (02:36:32 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:32 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.217e+01 (02:36:32 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:32 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (02:36:35 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:35 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:35 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (02:36:35 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:35 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (02:36:38 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:38 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.219e+01 (02:36:38 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (02:36:38 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (02:36:38 PM  Feb 26, 2026)
+          [info] Normal completion of simulation on server: Local Machine. (02:36:49 PM  Feb 26, 2026)
+          [warning] The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (02:36:51 PM  Feb 26, 2026)
+-- Message Window --
+Stopping Batch Run: 2:44:03 PM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 3:00:57 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 57961. 
+-- Message Window --
+Stopping Batch Run: 3:32:25 PM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 3:32:52 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 49820. 
+-- Message Window --
+Stopping Batch Run: 3:33:30 PM  Feb 26, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 5:44:32 PM  Feb 26, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+[warning] Electronics Desktop cannot be closed right now because it is being used by another application, script or extension wizard.
+
+-- Message Window --
+      Divisor_Coaxial_20260226_220954 (C:/Users/geral/AppData/Local/EFTX/DiagramSuite/HFSS_Projects/)
+        DivisorCoaxial (Modal Network)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (10:10:12 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (10:10:12 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (10:10:12 PM  Feb 26, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (10:10:12 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.101e+01 (10:10:43 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.225e+01 (10:10:43 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (10:10:43 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.218e+01 (10:10:43 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (10:10:43 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (10:10:46 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.221e+01 (10:10:46 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:47 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.217e+01 (10:10:47 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:47 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (10:10:50 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:50 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:50 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (10:10:50 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:50 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P1 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   5.100e+01 (10:10:55 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P2 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:55 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P3 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.219e+01 (10:10:55 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P4 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.216e+01 (10:10:56 PM  Feb 26, 2026)
+          [info] Solving adaptive frequency ..., process hf3d: Port P5 supports an additional propagating and/or slowly decaying mode whose attenuation is   0.000e+00 and propagation constant is   4.220e+01 (10:10:56 PM  Feb 26, 2026)
+          [info] Normal completion of simulation on server: Local Machine. (10:11:17 PM  Feb 26, 2026)
+          [warning] The variable  'Phase' doesn't have an associated sweep and is excluded from the definition of trace. (10:11:18 PM  Feb 26, 2026)
+-- Message Window --
+Stopping Batch Run: 12:02:00 AM  Feb 27, 2026
+ 
+Ansys Electronics Desktop Version 2025.2.0, Build: 2025-05-16 12:03:40
+Location: C:\Program Files\ANSYS Inc\v252\AnsysEM\ansysedt.exe
+Non Graphical Mode: No Project??
+Starting Batch Run: 3:02:11 PM  Feb 27, 2026
+Running as user : RF01\geral
+Temp directory: C:\Users\geral\AppData\Local\Temp
+Project directory: D:\Simulations\Simulations\#IFTX
+-- Message Window --
+      *Global - Messages
+        [info] GRPC server running on port: 51860. 
+      Divisor_Coaxial_20260227_150204 (C:/Users/geral/AppData/Local/DIVISOR/HFSS_Projects/)
+        DivisorCoaxial (Modal Network)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (03:03:07 PM  Feb 27, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (03:03:07 PM  Feb 27, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (03:03:07 PM  Feb 27, 2026)
+          [warning] Renormalizing the port impedance will not impact the field results if the 'Include Port Post Processing Effects' is disabled in Edit Sources. (03:03:07 PM  Feb 27, 2026)
+-- Message Window --
+Stopping Batch Run: 3:03:24 PM  Feb 27, 2026

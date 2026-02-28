@@ -1,5 +1,6 @@
 param(
-    [switch]$Clean
+    [switch]$Clean,
+    [int]$Threads = 16
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +56,37 @@ if ($Clean) {
   --add-data "LICENSE.rtf;." `
   --add-data "installer\\EULA_README_GPL.rtf;." `
   ".\deep3.py"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller falhou (exit code $LASTEXITCODE)."
+}
+
+$threadsSafe = [Math]::Max(1, [Math]::Min(64, [int]$Threads))
+$nbSrcRoot = Join-Path $repo "analise_cobertura\Notebook_Cover"
+$nbDstRoot = Join-Path $repo "dist\EFTX_DiagramSuite\analise_cobertura\Notebook_Cover"
+if (Test-Path $nbSrcRoot) {
+    New-Item -ItemType Directory -Force $nbDstRoot | Out-Null
+    $runtimeDirs = @("APP", "ANATEL", "MANUAL", "tools")
+    foreach ($dir in $runtimeDirs) {
+        $srcDir = Join-Path $nbSrcRoot $dir
+        if (Test-Path $srcDir) {
+            $dstDir = Join-Path $nbDstRoot $dir
+            New-Item -ItemType Directory -Force $dstDir | Out-Null
+            Write-Host "Copiando Notebook_Cover\$dir para dist..."
+            & robocopy $srcDir $dstDir /E /R:1 /W:1 /MT:$threadsSafe /XD "__pycache__" ".pytest_cache" /NFL /NDL /NJH /NJS /NP
+            $rc = $LASTEXITCODE
+            if ($rc -gt 7) {
+                throw "Falha ao copiar Notebook_Cover\$dir para dist (robocopy exit code $rc)."
+            }
+        }
+    }
+    foreach ($placeholder in @("DEM", "IBGE", "EXPORTS", "logs")) {
+        New-Item -ItemType Directory -Force (Join-Path $nbDstRoot $placeholder) | Out-Null
+    }
+    Write-Host "Notebook_Cover runtime copiado (APP/ANATEL/MANUAL/tools). DEM/IBGE serao carregados sob demanda."
+} else {
+    throw "Diretorio Notebook_Cover nao encontrado: $nbSrcRoot"
+}
 
 Write-Host ""
 Write-Host "Build PyInstaller concluido em dist\EFTX_DiagramSuite"

@@ -185,6 +185,12 @@ class DivisorTab(ctk.CTkFrame):
         ctk.CTkButton(right, text="Open AEDT", width=95, command=self._open_aedt_project_location).pack(
             side=ctk.LEFT, padx=3
         )
+        ctk.CTkButton(
+            right,
+            text="Abrir Analise Avancada",
+            width=170,
+            command=self._open_divisor_advanced_analysis,
+        ).pack(side=ctk.LEFT, padx=3)
         ctk.CTkButton(right, text="Save Snapshot", width=110, command=self._save_snapshot).pack(
             side=ctk.LEFT, padx=3
         )
@@ -926,6 +932,7 @@ class DivisorTab(ctk.CTkFrame):
         self._set_project_label(self._last_project_path, self._last_design_name)
         self._update_kpi_cards(run.metrics)
         self._update_rf_plot()
+        self._publish_divisor_sources_to_advanced(prefer_selected=True, quiet=True)
 
     def _run_selected_record(self) -> None:
         ids = list(self.runs_tree.selection())
@@ -976,6 +983,7 @@ class DivisorTab(ctk.CTkFrame):
         ids = set(self.runs_tree.selection())
         self._compare_run_ids = set(ids)
         self._update_rf_plot()
+        self._publish_divisor_sources_to_advanced(prefer_selected=False, quiet=True)
         self._set_status(f"Compare overlay updated with {len(ids)} run(s).")
 
     def _export_selected_run(self) -> None:
@@ -1097,6 +1105,12 @@ class DivisorTab(ctk.CTkFrame):
         ctk.CTkButton(controls, text="Analyze Plot", width=95, command=self._analyze_current_plot).pack(
             side=ctk.LEFT, padx=(0, 8)
         )
+        ctk.CTkButton(
+            controls,
+            text="Link Avancada",
+            width=105,
+            command=lambda: self._publish_divisor_sources_to_advanced(prefer_selected=True, quiet=False),
+        ).pack(side=ctk.LEFT, padx=(0, 8))
         ctk.CTkOptionMenu(
             controls,
             variable=self.rl_display_var,
@@ -1230,6 +1244,123 @@ class DivisorTab(ctk.CTkFrame):
             if run and run.rf_data:
                 datasets.append((run_id, dict(run.rf_data)))
         return datasets
+
+    def _get_advanced_view(self):
+        if self.app is None:
+            return None
+        return getattr(self.app, "advanced_tab_view", None)
+
+    def _build_divisor_advanced_sources(self) -> tuple[dict, str]:
+        metric_to_suffix = {
+            "S11 (dB)": "S11 (dB)",
+            "Return Loss (+dB)": "Return Loss (+dB)",
+            "|Z| (Ohm)": "|Z| (Ohm)",
+            "Phase (deg)": "Phase (deg)",
+            "Smith Chart": "S11 (dB)",
+        }
+        selected_metric = str(self.plotly_metric_var.get() or "S11 (dB)")
+        wanted_suffix = metric_to_suffix.get(selected_metric, "S11 (dB)")
+
+        out: dict = {}
+        preferred_key = ""
+        datasets = self._collect_plot_datasets()
+        current_label = str(self._current_run_id or "current")
+        for idx, (label, data) in enumerate(datasets):
+            freq = np.asarray(data.get("frequency", []), dtype=float).reshape(-1)
+            rl_pos = np.asarray(data.get("return_loss_db", []), dtype=float).reshape(-1)
+            z = np.asarray(data.get("impedance_ohm", []), dtype=float).reshape(-1)
+            ph = np.asarray(data.get("phase_deg", []), dtype=float).reshape(-1)
+            n = min(len(freq), len(rl_pos), len(z), len(ph))
+            if n <= 1:
+                continue
+            freq = freq[:n]
+            rl_pos = rl_pos[:n]
+            z = z[:n]
+            ph = ph[:n]
+            s11_db = -rl_pos
+
+            run_label = str(label or f"run_{idx + 1}")
+            project_token = str(data.get("project_path") or self._last_project_path or "").strip()
+            design_token = str(data.get("design_name") or self._last_design_name or "DivisorCoaxial").strip()
+            origin = f"Divisor | project={project_token or '-'} | design={design_token}"
+
+            metrics = [
+                ("S11 (dB)", s11_db, True),
+                ("Return Loss (+dB)", rl_pos, False),
+                ("|Z| (Ohm)", z, True),
+                ("Phase (deg)", ph, True),
+            ]
+            for suffix, values, allow_negative in metrics:
+                key = f"Divisor RF | {run_label} | {suffix}"
+                out[key] = {
+                    "kind": "V",
+                    "angles": np.asarray(freq, dtype=float),
+                    "values": np.asarray(values, dtype=float),
+                    "origin": origin,
+                    "normalize": False,
+                    "allow_negative": bool(allow_negative),
+                }
+                if not preferred_key and run_label == current_label and suffix == wanted_suffix:
+                    preferred_key = key
+                elif not preferred_key and idx == 0 and suffix == wanted_suffix:
+                    preferred_key = key
+
+        if not preferred_key and out:
+            preferred_key = next(iter(out.keys()))
+        return out, preferred_key
+
+    def _publish_divisor_sources_to_advanced(self, prefer_selected: bool = True, quiet: bool = True) -> bool:
+        if not self._rf_data:
+            if not quiet:
+                messagebox.showwarning("Analise Avancada", "No RF data loaded yet.")
+            return False
+
+        view = self._get_advanced_view()
+        if view is None:
+            if not quiet:
+                messagebox.showwarning("Analise Avancada", "A aba Visualizacao Avancada nao esta disponivel.")
+            return False
+
+        sources, preferred_key = self._build_divisor_advanced_sources()
+        if not sources:
+            if not quiet:
+                messagebox.showwarning("Analise Avancada", "No valid RF dataset to link.")
+            return False
+
+        prefix = "Divisor RF | "
+        user_sources = getattr(view, "user_sources", {})
+        if isinstance(user_sources, dict):
+            for key in list(user_sources.keys()):
+                if str(key).startswith(prefix):
+                    user_sources.pop(key, None)
+            user_sources.update(sources)
+            view.user_sources = user_sources
+        else:
+            view.user_sources = dict(sources)
+
+        try:
+            view.refresh_sources(preferred_key=preferred_key if prefer_selected else "")
+            self._set_status(
+                f"Divisor linked to Advanced tab ({len(sources)} source(s), preferred={preferred_key or '-'})"
+            )
+            return True
+        except Exception as exc:
+            if not quiet:
+                messagebox.showerror("Analise Avancada", str(exc))
+            return False
+
+    def _open_divisor_advanced_analysis(self) -> None:
+        if self.app is None:
+            messagebox.showwarning("Analise Avancada", "Advanced tab is only available in the main application.")
+            return
+        try:
+            if hasattr(self.app, "open_advanced_view"):
+                self.app.open_advanced_view()
+            elif hasattr(self.app, "tabs"):
+                self.app.tabs.set("Visualizacao Avancada")
+        except Exception:
+            pass
+        self._publish_divisor_sources_to_advanced(prefer_selected=True, quiet=False)
 
     def _open_plotly_view(self) -> None:
         if not self._rf_data:
@@ -1977,6 +2108,7 @@ class DivisorTab(ctk.CTkFrame):
                 self._refresh_runs_tree()
                 self._current_run_id = run.run_id
         self._update_rf_plot()
+        self._publish_divisor_sources_to_advanced(prefer_selected=True, quiet=True)
         self.results_tabs.set("RF Plots")
         self._set_status("RF plots updated.")
 

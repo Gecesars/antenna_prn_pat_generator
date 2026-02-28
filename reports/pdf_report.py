@@ -13,11 +13,23 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 
 import numpy as np
 from PIL import Image as PILImage
-from reportlab.lib import colors
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas as rl_canvas
-from reportlab.platypus import Paragraph, Table, TableStyle
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.platypus import Paragraph, Table, TableStyle
+    _REPORTLAB_IMPORT_ERROR = None
+except Exception as _exc:
+    colors = None
+    ParagraphStyle = None
+    getSampleStyleSheet = None
+    ImageReader = None
+    rl_canvas = None
+    Paragraph = None
+    Table = None
+    TableStyle = None
+    _REPORTLAB_IMPORT_ERROR = _exc
 
 from core.audit import emit_audit
 from . import layout
@@ -36,6 +48,15 @@ class ReportExportError(RuntimeError):
 
 class ReportCancelled(RuntimeError):
     """Raised when a user cancellation token is triggered."""
+
+
+def _ensure_reportlab_available() -> None:
+    if _REPORTLAB_IMPORT_ERROR is None:
+        return
+    raise ReportExportError(
+        "PDF export dependency missing: reportlab. "
+        "Install with 'python -m pip install reportlab' in the same environment used to run the app."
+    ) from _REPORTLAB_IMPORT_ERROR
 
 
 def _slug(value: str) -> str:
@@ -350,6 +371,7 @@ def export_report_pdf(
     Generate a multipage PDF report and merge template as underlay.
     One page is generated for each cut in payload["pages"].
     """
+    _ensure_reportlab_available()
     log = logger or logging.getLogger(__name__)
     t_start = time.perf_counter()
     emit_audit(
