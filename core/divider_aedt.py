@@ -13,7 +13,7 @@ import inspect
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -53,16 +53,38 @@ def sanitize_material_name(name: str) -> str:
     return token or "material"
 
 
-def _output_diameters(d_int_tube: float, d_out_50: float, n_outputs: int) -> Tuple[float, float]:
+def _output_diel_diameter_mm(
+    d_int_tube_mm: float,
+    n_outputs: int,
+    len_inner_mm: Optional[float] = None,
+    min_hf_scale: float = 0.70,
+    ref_len_to_diam_ratio: float = 10.0,
+) -> float:
+    """Output dielectric diameter logic mirrored from Calc_Div_EFTX.py."""
     if int(n_outputs) > 6:
-        dia_diel = float(d_int_tube) / 3.0
-        dia_cond = dia_diel / 2.3
-        return dia_diel, dia_cond
-    if int(n_outputs) > 4:
-        dia_diel = float(d_int_tube) / 2.2
-        dia_cond = dia_diel / 2.3
-        return dia_diel, dia_cond
-    return float(d_int_tube), float(d_out_50)
+        base_fraction = 0.25
+    elif int(n_outputs) > 4:
+        base_fraction = 0.32
+    else:
+        base_fraction = 0.40
+
+    if len_inner_mm is None:
+        hf_scale = 1.0
+    else:
+        length_ratio = float(len_inner_mm) / max(float(d_int_tube_mm), 1e-9)
+        normalized_ratio = max(min(length_ratio / float(ref_len_to_diam_ratio), 1.0), 0.0)
+        hf_scale = float(min_hf_scale) + (1.0 - float(min_hf_scale)) * math.sqrt(normalized_ratio)
+    return float(d_int_tube_mm) * float(base_fraction) * float(hf_scale)
+
+
+def _output_length_mm(
+    len_inner_mm: float,
+    d_int_tube_mm: float,
+    base_ratio: float = 0.1,
+    min_tube_diam_factor: float = 1.0,
+) -> float:
+    """Output branch length logic mirrored from Calc_Div_EFTX.py."""
+    return max(float(len_inner_mm) * float(base_ratio), float(d_int_tube_mm) * float(min_tube_diam_factor))
 
 
 def compute_coaxial_divider_geometry(params: Mapping[str, Any]) -> dict:
@@ -97,7 +119,7 @@ def compute_coaxial_divider_geometry(params: Mapping[str, Any]) -> dict:
     wavelength_mm = 299792.458 / (f0_mhz * math.sqrt(er_val))
     sec_len_mm = wavelength_mm / 4.0
     len_inner_mm = float(n_sections) * sec_len_mm
-    len_outer_mm = len_inner_mm * 1.05
+    len_outer_mm = (len_inner_mm * 1.05) * 1.10
     d_int_tube = d_ext - (2.0 * wall_thick)
 
     z0 = 50.0
@@ -108,7 +130,17 @@ def compute_coaxial_divider_geometry(params: Mapping[str, Any]) -> dict:
     ]
     main_diams = [d_int_tube / math.exp(z_i * math.sqrt(er_val) / 59.952) for z_i in z_sects]
     d_out_50ohm = d_int_tube / math.exp(z0 * math.sqrt(er_val) / 59.952)
-    dia_saida_diel, dia_saida_cond = _output_diameters(d_int_tube, d_out_50ohm, n_outputs)
+    dia_saida_diel = _output_diel_diameter_mm(
+        d_int_tube_mm=d_int_tube,
+        n_outputs=n_outputs,
+        len_inner_mm=len_inner_mm,
+    )
+    ratio_inner_outer = float(d_out_50ohm) / max(float(d_int_tube), 1e-9)
+    dia_saida_cond = float(dia_saida_diel) * float(ratio_inner_outer)
+    comp_saida_mm = _output_length_mm(
+        len_inner_mm=len_inner_mm,
+        d_int_tube_mm=d_int_tube,
+    )
 
     out = dict(p)
     out.update(
@@ -123,7 +155,7 @@ def compute_coaxial_divider_geometry(params: Mapping[str, Any]) -> dict:
             "d_out_50ohm": float(d_out_50ohm),
             "dia_saida_diel": float(dia_saida_diel),
             "dia_saida_cond": float(dia_saida_cond),
-            "comp_saida_mm": float(len_inner_mm * 0.1),
+            "comp_saida_mm": float(comp_saida_mm),
             "diel_er": float(er_val),
             "diel_tand": float(tan_delta),
         }
