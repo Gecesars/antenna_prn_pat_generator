@@ -2793,6 +2793,8 @@ class PATConverterApp(ctk.CTk):
         self.aedt_live_3d: Optional[dict] = None
         self.aedt_live_cad_3d: Optional[dict] = None
         self.aedt_live_cad_manifest: Optional[dict] = None
+        self.divisor_last_project_path: str = ""
+        self.divisor_last_design_name: str = ""
         
         # Estado da aba de estudo completo (suporte a polarizacao dupla)
         self.study_mode_var = tk.StringVar(value="simples")  # simples | duplo
@@ -5410,6 +5412,9 @@ class PATConverterApp(ctk.CTk):
         aedt_payload = getattr(self, "aedt_live_last_payload", None)
         aedt_grid = getattr(self, "aedt_live_3d", None)
         aedt_cad = getattr(self, "aedt_live_cad_manifest", None)
+        divisor_project = str(getattr(self, "divisor_last_project_path", "") or "").strip()
+        divisor_design = str(getattr(self, "divisor_last_design_name", "") or "").strip()
+        divisor_ctx = "sim" if divisor_project else "nao"
         aedt_has_2d = "sim" if isinstance(aedt_payload, dict) and isinstance(aedt_payload.get("cuts_2d"), dict) and bool(aedt_payload.get("cuts_2d")) else "nao"
         aedt_has_3d = "sim" if isinstance(aedt_grid, dict) else "nao"
         aedt_has_cad = "sim" if isinstance(aedt_cad, dict) and isinstance(aedt_cad.get("files"), list) and bool(aedt_cad.get("files")) else "nao"
@@ -5424,6 +5429,9 @@ class PATConverterApp(ctk.CTk):
             f"AEDT 2D no projeto: {aedt_has_2d}",
             f"AEDT 3D no projeto: {aedt_has_3d}",
             f"AEDT CAD no projeto: {aedt_has_cad}",
+            f"Divisor AEDT no projeto: {divisor_ctx}",
+            f"Divisor project: {divisor_project or '-'}",
+            f"Divisor design: {divisor_design or '-'}",
             "",
             "Entradas (Aba Arquivo):",
             f"VRP: {size_info('v_angles')}",
@@ -5540,6 +5548,8 @@ class PATConverterApp(ctk.CTk):
             "aedt_live_last_payload": self.aedt_live_last_payload if isinstance(self.aedt_live_last_payload, dict) else None,
             "aedt_live_3d": self.aedt_live_3d if isinstance(self.aedt_live_3d, dict) else None,
             "aedt_live_cad_manifest": self.aedt_live_cad_manifest if isinstance(self.aedt_live_cad_manifest, dict) else None,
+            "divisor_last_project_path": str(getattr(self, "divisor_last_project_path", "") or ""),
+            "divisor_last_design_name": str(getattr(self, "divisor_last_design_name", "") or ""),
         }
 
     def _apply_project_state(self, state: dict):
@@ -5608,6 +5618,8 @@ class PATConverterApp(ctk.CTk):
         aedt_cad_manifest = state.get("aedt_live_cad_manifest")
         self.aedt_live_cad_manifest = aedt_cad_manifest if isinstance(aedt_cad_manifest, dict) else None
         self.aedt_live_cad_3d = None
+        self.divisor_last_project_path = str(state.get("divisor_last_project_path", "") or "")
+        self.divisor_last_design_name = str(state.get("divisor_last_design_name", "") or "")
 
         if self.v_angles is not None and self.v_vals is not None:
             self._plot_vertical_file(self.v_angles, self.v_vals)
@@ -7224,12 +7236,14 @@ class PATConverterApp(ctk.CTk):
         self.vert_N = tk.StringVar(value="4")
         self.vert_freq = tk.StringVar(value="0.9")
         self.vert_funit = tk.StringVar(value="GHz")
+        self.vert_band = tk.StringVar(value="0.05")
         self.vert_beta = tk.StringVar(value="0.0")
         self.vert_level = tk.StringVar(value="1.0")
         self.vert_space = tk.StringVar(value="0.5")
         self.vert_norm = tk.StringVar(value="max")
         self.vert_tilt_elec_deg = tk.StringVar(value="0.0")
         self.vert_null_fill_pct = tk.StringVar(value="20.0")
+        self.vert_min_power_pct = tk.StringVar(value="5.0")
         self.vert_null_mode = tk.StringVar(value="both")
         self.vert_null_order = tk.StringVar(value="1")
         self.vert_fill_weight = tk.StringVar(value="32.0")
@@ -7276,10 +7290,19 @@ class PATConverterApp(ctk.CTk):
             validatecommand=vcmd_float,
         ).pack(side=ctk.LEFT, padx=(8, 4))
         ctk.CTkOptionMenu(freq_row, variable=self.vert_funit, values=["Hz", "kHz", "MHz", "GHz"], width=80).pack(side=ctk.LEFT)
+        ctk.CTkLabel(freq_row, text="Banda (+/-):", width=80, anchor="e").pack(side=ctk.LEFT, padx=(8, 4))
+        ctk.CTkEntry(
+            freq_row,
+            textvariable=self.vert_band,
+            width=78,
+            validate="key",
+            validatecommand=vcmd_float,
+        ).pack(side=ctk.LEFT, padx=(0, 4))
 
         create_param_row(essentials, "Espacamento d [m]:", self.vert_space, validate="float")
         create_param_row(essentials, "Tilt eletrico [deg]:", self.vert_tilt_elec_deg, validate="float")
         create_param_row(essentials, "Null fill [%]:", self.vert_null_fill_pct, validate="float")
+        create_param_row(essentials, "Piso pot. por nivel [%]:", self.vert_min_power_pct, validate="float")
         create_param_row(essentials, "Nulo alvo:", self.vert_null_order, ["1", "2", "3", "4", "5"], width=120)
         create_param_row(essentials, "Modo null fill:", self.vert_null_mode, ["amplitude", "phase", "both"], width=140)
 
@@ -7289,6 +7312,12 @@ class PATConverterApp(ctk.CTk):
             command=self.compute_vertical_array,
             fg_color="#2277cc",
         ).pack(fill=ctk.X, padx=8, pady=(8, 6))
+        ctk.CTkButton(
+            essentials,
+            text="Enviar Composicao ao Divisor",
+            command=self._send_vertical_composition_to_divider,
+            fg_color="#2f8f6b",
+        ).pack(fill=ctk.X, padx=8, pady=(0, 6))
 
         export_frame = ctk.CTkFrame(input_frame)
         export_frame.pack(fill=ctk.X, padx=8, pady=(0, 8))
@@ -7448,6 +7477,146 @@ class PATConverterApp(ctk.CTk):
         if unit == "ghz": return val * 1e9
         return val
 
+    def _freq_to_mhz(self, val: float, unit: str) -> float:
+        return self._freq_to_hz(float(val), unit) / 1e6
+
+    def _center_band_to_range_mhz(self, center_val: float, band_val: float, unit: str) -> Tuple[float, float, float]:
+        center_mhz = self._freq_to_mhz(center_val, unit)
+        if center_mhz <= 0.0:
+            raise ValueError("Frequencia central deve ser > 0.")
+        band_mhz = abs(self._freq_to_mhz(band_val, unit))
+        if band_mhz <= 0.0:
+            band_mhz = max(1.0, center_mhz * 0.01)
+        f_start_mhz = max(0.001, center_mhz - band_mhz)
+        f_stop_mhz = max(f_start_mhz + 0.001, center_mhz + band_mhz)
+        return center_mhz, f_start_mhz, f_stop_mhz
+
+    def _send_composition_profile_to_divider(self, profile: Dict[str, object]) -> None:
+        div_tab = getattr(self, "divisor_tab", None)
+        if div_tab is None:
+            messagebox.showwarning(
+                "Divisor indisponivel",
+                "A aba Divisor nao foi carregada nesta execucao.",
+            )
+            return
+        importer = getattr(div_tab, "import_composition_profile", None)
+        if not callable(importer):
+            messagebox.showwarning(
+                "Integracao indisponivel",
+                "A aba Divisor nao suporta importacao de composicao nesta versao.",
+            )
+            return
+        ok = bool(importer(profile))
+        if not ok:
+            return
+        try:
+            self.tabs.set("Divisor")
+        except Exception:
+            pass
+        src = str(profile.get("source", "Composicao") or "Composicao")
+        n_outputs = int(profile.get("n_outputs", 0) or 0)
+        self._set_status(f"{src} enviada ao Divisor ({n_outputs} saidas).")
+
+    def _build_vertical_divider_profile(self) -> Dict[str, object]:
+        n_outputs = max(1, self._get_int_value(self.vert_N, 1))
+        freq_val = self._get_float_value(self.vert_freq, 0.0)
+        band_val = self._get_float_value(self.vert_band, 0.0)
+        unit = str(self.vert_funit.get() or "MHz")
+        f_center_mhz, f_start_mhz, f_stop_mhz = self._center_band_to_range_mhz(freq_val, band_val, unit)
+
+        mode = str(self.vert_null_mode.get() or "amplitude").strip().lower()
+        if mode not in ("amplitude", "phase", "both"):
+            mode = "amplitude"
+        null_fill_pct = max(0.0, min(100.0, self._get_float_value(self.vert_null_fill_pct, 0.0)))
+
+        percentages = [100.0 / float(n_outputs)] * n_outputs
+        phases_deg = [0.0] * n_outputs
+        harness_used = False
+
+        harness = self.vert_harness if isinstance(self.vert_harness, dict) else None
+        synth = self.vert_synth_result if isinstance(self.vert_synth_result, dict) else None
+        if synth is not None:
+            synth_mode = str(synth.get("mode", mode) or mode).strip().lower()
+            if synth_mode in ("amplitude", "phase", "both"):
+                mode = synth_mode
+
+        if harness is not None and null_fill_pct > 0.0:
+            p_frac = np.asarray(harness.get("p_frac", []), dtype=float).reshape(-1)
+            if p_frac.size >= n_outputs:
+                raw_pct = [max(0.0, float(p_frac[i])) * 100.0 for i in range(n_outputs)]
+                total = float(sum(raw_pct))
+                if total > 0.0:
+                    percentages = [x * (100.0 / total) for x in raw_pct]
+                    harness_used = True
+            if mode in ("phase", "both"):
+                ph = np.asarray(harness.get("phase_deg", []), dtype=float).reshape(-1)
+                phases_deg = [float(ph[i]) if i < ph.size else 0.0 for i in range(n_outputs)]
+
+        if not harness_used:
+            percentages = [100.0 / float(n_outputs)] * n_outputs
+        if mode in ("phase", "both") and not harness_used:
+            beta = self._get_float_value(self.vert_beta, 0.0)
+            phases_deg = [float(i) * float(beta) for i in range(n_outputs)]
+        if mode == "amplitude":
+            phases_deg = [0.0] * n_outputs
+
+        spread = (max(percentages) - min(percentages)) if percentages else 0.0
+        return {
+            "source": "Composicao Vertical",
+            "n_outputs": int(n_outputs),
+            "f_center_mhz": float(f_center_mhz),
+            "band_mhz": float(abs(f_center_mhz - f_start_mhz)),
+            "f_start_mhz": float(f_start_mhz),
+            "f_stop_mhz": float(f_stop_mhz),
+            "percentages": [float(x) for x in percentages],
+            "phases_deg": [float(x) for x in phases_deg],
+            "excitation_mode": mode,
+            "asymmetric": bool(spread > 1e-3),
+            "null_fill_pct": float(null_fill_pct),
+            "harness_used": bool(harness_used),
+        }
+
+    def _build_horizontal_divider_profile(self) -> Dict[str, object]:
+        n_outputs = max(1, self._get_int_value(self.horz_N, 1))
+        freq_val = self._get_float_value(self.horz_freq, 0.0)
+        band_val = self._get_float_value(self.horz_band, 0.0)
+        unit = str(self.horz_funit.get() or "MHz")
+        f_center_mhz, f_start_mhz, f_stop_mhz = self._center_band_to_range_mhz(freq_val, band_val, unit)
+
+        beta_deg = self._get_float_value(self.horz_beta, 0.0)
+        percentages = [100.0 / float(n_outputs)] * n_outputs
+        use_phase = abs(beta_deg) > 1e-9
+        phases_deg = [float(i) * float(beta_deg) for i in range(n_outputs)] if use_phase else [0.0] * n_outputs
+        mode = "both" if use_phase else "amplitude"
+
+        return {
+            "source": "Composicao Horizontal",
+            "n_outputs": int(n_outputs),
+            "f_center_mhz": float(f_center_mhz),
+            "band_mhz": float(abs(f_center_mhz - f_start_mhz)),
+            "f_start_mhz": float(f_start_mhz),
+            "f_stop_mhz": float(f_stop_mhz),
+            "percentages": [float(x) for x in percentages],
+            "phases_deg": [float(x) for x in phases_deg],
+            "excitation_mode": mode,
+            "asymmetric": False,
+            "beta_deg_per_output": float(beta_deg),
+        }
+
+    def _send_vertical_composition_to_divider(self):
+        try:
+            profile = self._build_vertical_divider_profile()
+            self._send_composition_profile_to_divider(profile)
+        except Exception as e:
+            messagebox.showerror("Falha ao enviar composicao vertical", str(e))
+
+    def _send_horizontal_composition_to_divider(self):
+        try:
+            profile = self._build_horizontal_divider_profile()
+            self._send_composition_profile_to_divider(profile)
+        except Exception as e:
+            messagebox.showerror("Falha ao enviar composicao horizontal", str(e))
+
     def _get_float_value(self, var: tk.StringVar, default: float = 0.0) -> float:
         """Obtém valor float de StringVar com tratamento de erro"""
         try:
@@ -7564,6 +7733,10 @@ class PATConverterApp(ctk.CTk):
         target_percent = "-"
         achieved_percent = "-"
         phase_limit = "-"
+        power_floor_req = "-"
+        power_floor_eff = "-"
+        power_floor_ach = "-"
+        attempts_txt = "-"
         if isinstance(synth_info, dict):
             cond_val = synth_info.get("condition_number", None)
             if cond_val is not None and math.isfinite(float(cond_val)):
@@ -7581,6 +7754,19 @@ class PATConverterApp(ctk.CTk):
             pl = synth_info.get("phase_limit_deg", None)
             if pl is not None and math.isfinite(float(pl)):
                 phase_limit = f"{float(pl):.1f} deg"
+            pfr = synth_info.get("power_floor_percent_request", None)
+            if pfr is not None and math.isfinite(float(pfr)):
+                power_floor_req = f"{float(pfr):.2f}%"
+            pfe = synth_info.get("power_floor_percent_effective", None)
+            if pfe is not None and math.isfinite(float(pfe)):
+                power_floor_eff = f"{float(pfe):.2f}%"
+            pfa = synth_info.get("power_floor_achieved_percent", None)
+            if pfa is not None and math.isfinite(float(pfa)):
+                power_floor_ach = f"{float(pfa):.2f}%"
+            ntry = synth_info.get("candidate_attempts", None)
+            nsel = synth_info.get("candidate_selected", None)
+            if ntry is not None:
+                attempts_txt = f"{int(nsel) if nsel is not None else '-'} / {int(ntry)}"
             for nl in synth_info.get("null_levels", []) or []:
                 try:
                     side = str(nl.get("side", "?")).strip()
@@ -7638,6 +7824,9 @@ class PATConverterApp(ctk.CTk):
         lines.extend(null_summary if null_summary else ["-"])
         lines.extend([
             "",
+            f"PISO DE POTENCIA: req={power_floor_req} | efetivo={power_floor_eff} | atingido(min)={power_floor_ach}",
+            f"TENTATIVAS AUTO: {attempts_txt}",
+            "",
             "PESOS POR NIVEL",
             "Nivel |    |w|   | Pot[%] | Fase[deg] | AttRef[dB] | DeltaL[m] | Posicao",
             "----------------------------------------------------------------------",
@@ -7656,6 +7845,161 @@ class PATConverterApp(ctk.CTk):
 
         box = self.vert_weights_text
         self._set_readonly_text(box, "\n".join(lines))
+
+    def _score_vertical_nullfill_candidate(
+        self,
+        synth: dict,
+        harness: dict,
+        *,
+        target_pct: float,
+        floor_eff_pct: float,
+        eps_deg: np.ndarray,
+    ) -> Dict[str, float]:
+        p_frac = np.asarray(harness.get("p_frac", []), dtype=float).reshape(-1)
+        if p_frac.size == 0:
+            min_pct = 0.0
+            spread_pct = 0.0
+        else:
+            pcts = 100.0 * p_frac
+            min_pct = float(np.min(pcts))
+            spread_pct = float(np.max(pcts) - np.min(pcts))
+
+        achieved_pct = float(synth.get("achieved_percent", 0.0) or 0.0)
+        fill_err = abs(float(target_pct) - achieved_pct)
+
+        e_ini = np.abs(np.asarray(synth.get("E_initial", []), dtype=complex)).reshape(-1)
+        e_fin = np.abs(np.asarray(synth.get("E_final", []), dtype=complex)).reshape(-1)
+        if e_ini.size == 0 or e_fin.size != e_ini.size:
+            main_delta = 1.0
+            peak_shift = 180.0
+        else:
+            e_ini_n = e_ini / (np.max(e_ini) if np.max(e_ini) > 0 else 1.0)
+            e_fin_n = e_fin / (np.max(e_fin) if np.max(e_fin) > 0 else 1.0)
+            idx_pk = int(np.argmax(e_ini_n))
+            center = float(eps_deg[idx_pk]) if idx_pk < eps_deg.size else 0.0
+            ml_mask = np.abs(np.asarray(eps_deg, dtype=float) - center) <= 8.0
+            if not np.any(ml_mask):
+                ml_mask = slice(None)
+            diff = e_fin_n[ml_mask] - e_ini_n[ml_mask]
+            main_delta = float(np.sqrt(np.mean(np.square(diff)))) if np.size(diff) else 1.0
+            peak_fin = float(synth.get("peak_eps_deg", center) or center)
+            peak_shift = abs(peak_fin - center)
+
+        floor_def = max(0.0, float(floor_eff_pct) - float(min_pct))
+        floor_penalty = 500.0 * floor_def
+        score = (
+            floor_penalty
+            + 1.2 * fill_err
+            + 65.0 * main_delta
+            + 0.35 * peak_shift
+            + 0.18 * spread_pct
+        )
+        return {
+            "score": float(score),
+            "min_pct": float(min_pct),
+            "spread_pct": float(spread_pct),
+            "fill_err": float(fill_err),
+            "main_delta": float(main_delta),
+            "peak_shift": float(peak_shift),
+            "achieved_pct": float(achieved_pct),
+        }
+
+    def _run_vertical_nullfill_candidates(
+        self,
+        *,
+        f_hz: float,
+        z_m: np.ndarray,
+        eps_grid_deg: np.ndarray,
+        null_order: int,
+        null_fill_pct: float,
+        mode: str,
+        tilt_deg: float,
+        elem_pattern,
+        reg_lambda: float,
+        max_iters: int,
+        preserve_main_weight: float,
+        fill_weight: float,
+        beta_deg: float,
+        amp_fixed: Optional[np.ndarray],
+        vf: float,
+        floor_req_pct: float,
+    ) -> Tuple[dict, dict]:
+        n = int(np.asarray(z_m, dtype=float).size)
+        floor_eff_pct = min(max(0.0, float(floor_req_pct)), (100.0 / float(max(1, n))))
+
+        candidates_cfg = [
+            {"fill": 1.00, "pres": 1.00, "reg": 1.0, "iters": 1.00, "phase_lim": None},
+        ]
+        if null_fill_pct > 0.0:
+            candidates_cfg.extend(
+                [
+                    {"fill": 0.90, "pres": 1.20, "reg": 2.0, "iters": 1.00, "phase_lim": None},
+                    {"fill": 1.10, "pres": 1.30, "reg": 3.0, "iters": 1.00, "phase_lim": None},
+                    {"fill": 0.85, "pres": 1.50, "reg": 5.0, "iters": 1.10, "phase_lim": 45.0 if mode == "both" else None},
+                    {"fill": 1.25, "pres": 1.10, "reg": 1.5, "iters": 0.90, "phase_lim": None},
+                ]
+            )
+
+        best = None
+        last_error: Optional[Exception] = None
+        attempts = 0
+        for idx, cfg in enumerate(candidates_cfg, start=1):
+            attempts += 1
+            try:
+                synth = synth_null_fill_by_order(
+                    f_hz=f_hz,
+                    z_m=z_m,
+                    eps_grid_deg=eps_grid_deg,
+                    null_order=null_order,
+                    null_fill_percent=null_fill_pct,
+                    mode=mode,
+                    mainlobe_tilt_deg=tilt_deg,
+                    elem_pattern=elem_pattern,
+                    reg_lambda=max(1e-12, float(reg_lambda) * float(cfg["reg"])),
+                    max_iters=max(1, int(round(float(max_iters) * float(cfg["iters"])))),
+                    preserve_mainlobe_weight=max(2.0, float(preserve_main_weight) * float(cfg["pres"])),
+                    fill_weight=max(2.0, float(fill_weight) * float(cfg["fill"])),
+                    phase_limits_deg=cfg["phase_lim"],
+                    progressive_phase_deg_per_elem=beta_deg,
+                    amp_fixed=amp_fixed if mode == "phase" else None,
+                    power_floor_percent=floor_eff_pct,
+                )
+                harness = weights_to_harness(np.asarray(synth["w"], dtype=complex), f_hz=f_hz, vf=vf, ref_index=0)
+                eval_info = self._score_vertical_nullfill_candidate(
+                    synth,
+                    harness,
+                    target_pct=float(null_fill_pct),
+                    floor_eff_pct=float(floor_eff_pct),
+                    eps_deg=np.asarray(eps_grid_deg, dtype=float),
+                )
+                bundle = {
+                    "synth": synth,
+                    "harness": harness,
+                    "eval": eval_info,
+                    "idx": idx,
+                }
+                if best is None or float(eval_info["score"]) < float(best["eval"]["score"]):
+                    best = bundle
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if best is None:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("Falha ao sintetizar null fill.")
+
+        synth_best = best["synth"]
+        harness_best = best["harness"]
+        eval_best = best["eval"]
+        synth_best["power_floor_percent_request"] = float(max(0.0, floor_req_pct))
+        synth_best["power_floor_percent_effective"] = float(floor_eff_pct)
+        synth_best["power_floor_achieved_percent"] = float(eval_best.get("min_pct", 0.0))
+        synth_best["candidate_attempts"] = int(attempts)
+        synth_best["candidate_selected"] = int(best["idx"])
+        synth_best["candidate_score"] = float(eval_best.get("score", 0.0))
+        synth_best["power_spread_percent"] = float(eval_best.get("spread_pct", 0.0))
+        return synth_best, harness_best
 
     def compute_vertical_array(self):
         if self.v_angles is None or self.v_vals is None:
@@ -7699,6 +8043,12 @@ class PATConverterApp(ctk.CTk):
 
             null_fill_pct = self._get_float_value(self.vert_null_fill_pct, 0.0)
             pct = max(0.0, min(100.0, null_fill_pct))
+            floor_req_pct = max(0.0, self._get_float_value(self.vert_min_power_pct, 0.0))
+            floor_eff_pct = min(floor_req_pct, 100.0 / float(max(1, N)))
+            if floor_req_pct > floor_eff_pct + 1e-9:
+                self._set_status(
+                    f"Piso de potencia ajustado para viabilidade: {floor_req_pct:.2f}% -> {floor_eff_pct:.2f}%."
+                )
 
             # Autoajuste para garantir foco no nulo com baixa deformacao do lobo principal.
             if pct > 0.0:
@@ -7715,21 +8065,23 @@ class PATConverterApp(ctk.CTk):
                 right=float(base_vals[-1]),
             )
 
-            synth = synth_null_fill_by_order(
+            synth, harness = self._run_vertical_nullfill_candidates(
                 f_hz=f_hz,
                 z_m=z_m,
                 eps_grid_deg=base_angles,
                 null_order=null_order,
-                null_fill_percent=pct,
+                null_fill_pct=pct,
                 mode=mode,
-                mainlobe_tilt_deg=tilt_deg,
+                tilt_deg=tilt_deg,
                 elem_pattern=elem_pattern,
                 reg_lambda=reg_lambda,
                 max_iters=max_iters,
-                preserve_mainlobe_weight=preserve_main_weight,
+                preserve_main_weight=preserve_main_weight,
                 fill_weight=fill_weight,
-                progressive_phase_deg_per_elem=beta_deg,
-                amp_fixed=amp_fixed if mode == "phase" else None,
+                beta_deg=beta_deg,
+                amp_fixed=amp_fixed,
+                vf=vf,
+                floor_req_pct=floor_req_pct,
             )
 
             E_comp = np.abs(np.asarray(synth["E_final"], dtype=complex))
@@ -7737,7 +8089,6 @@ class PATConverterApp(ctk.CTk):
             E_comp = E_comp / (np.max(E_comp) if np.max(E_comp) > 0 else 1.0)
             E_ini = E_ini / (np.max(E_ini) if np.max(E_ini) > 0 else 1.0)
 
-            harness = weights_to_harness(np.asarray(synth["w"], dtype=complex), f_hz=f_hz, vf=vf, ref_index=0)
             self.vert_synth_result = synth
             self.vert_harness = harness
             self._update_vertical_weights_view(np.asarray(synth["w"], dtype=complex), harness, mode, synth)
@@ -7763,7 +8114,10 @@ class PATConverterApp(ctk.CTk):
             self.vert_d2d_db.set(f"{d2d_db:.2f} dB" if math.isfinite(d2d_db) else "-")
             self.vert_angles = base_angles
             self.vert_values = E_comp
-            self._set_status("VRP composto calculado com preenchimento por ordem de nulo.")
+            self._set_status(
+                "VRP composto calculado com piso de potencia por nivel "
+                f"(min={float(synth.get('power_floor_achieved_percent', 0.0)):.2f}%)."
+            )
 
         except Exception as e:
             messagebox.showerror("Erro (Vertical)", str(e))
@@ -8025,6 +8379,7 @@ class PATConverterApp(ctk.CTk):
         self.horz_stepdeg = tk.StringVar(value="90.0")
         self.horz_freq    = tk.StringVar(value="0.9")
         self.horz_funit   = tk.StringVar(value="GHz")
+        self.horz_band    = tk.StringVar(value="0.05")
         self.horz_norm    = tk.StringVar(value="max")
 
         # Parâmetros de exportação
@@ -8057,6 +8412,14 @@ class PATConverterApp(ctk.CTk):
         ctk.CTkEntry(freq_row, textvariable=self.horz_freq, width=80, validate="key", 
                     validatecommand=vcmd_float).pack(side=ctk.LEFT, padx=(8, 4))
         ctk.CTkOptionMenu(freq_row, variable=self.horz_funit, values=["Hz","kHz","MHz","GHz"], width=70).pack(side=ctk.LEFT)
+        ctk.CTkLabel(freq_row, text="Banda (+/-):", width=80, anchor="e").pack(side=ctk.LEFT, padx=(8, 4))
+        ctk.CTkEntry(
+            freq_row,
+            textvariable=self.horz_band,
+            width=70,
+            validate="key",
+            validatecommand=vcmd_float,
+        ).pack(side=ctk.LEFT, padx=(0, 4))
         
         create_param_row(input_frame, "Beta [deg/painel]:", self.horz_beta, validate="float")
         create_param_row(input_frame, "Nivel (amp.):", self.horz_level, validate="float")
@@ -8079,6 +8442,12 @@ class PATConverterApp(ctk.CTk):
         btn_frame.pack(fill=ctk.X, padx=8, pady=12)
         ctk.CTkButton(btn_frame, text="Calcular HRP", command=self.compute_horizontal_panels, 
                      fg_color="#2277cc").pack(side=ctk.TOP, fill=ctk.X, pady=2)
+        ctk.CTkButton(
+            btn_frame,
+            text="Enviar Composicao ao Divisor",
+            command=self._send_horizontal_composition_to_divider,
+            fg_color="#2f8f6b",
+        ).pack(side=ctk.TOP, fill=ctk.X, pady=2)
         
         export_btn_frame = ctk.CTkFrame(btn_frame)
         export_btn_frame.pack(fill=ctk.X, pady=2)
