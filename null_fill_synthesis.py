@@ -185,6 +185,67 @@ def _apply_phase_limits_deg(w: np.ndarray, phase_limits_deg: Optional[float]) ->
     return a * np.exp(1j * phi_new)
 
 
+def _apply_power_floor_fraction(w: np.ndarray, power_floor_frac: Optional[float]) -> np.ndarray:
+    if power_floor_frac is None:
+        return w
+    pmin = float(power_floor_frac)
+    if pmin <= 0.0:
+        return w
+
+    wv = np.asarray(w, dtype=complex).reshape(-1)
+    n = int(wv.size)
+    if n <= 1:
+        return wv
+
+    # Feasibility bound: every branch >= pmin and sum(p)=1.
+    pmin = min(max(pmin, 0.0), 1.0 / float(n))
+    p = np.abs(wv) ** 2
+    ps = float(np.sum(p))
+    if ps <= 1e-15:
+        p = np.full(n, 1.0 / float(n), dtype=float)
+    else:
+        p = p / ps
+    if float(np.min(p)) >= pmin - 1e-12:
+        return wv
+
+    # Raise weak branches to floor.
+    p_new = np.maximum(p, pmin)
+    # If sum>1, take the excess from branches above floor.
+    s_new = float(np.sum(p_new))
+    if s_new > 1.0 + 1e-12:
+        excess_total = s_new - 1.0
+        for _ in range(3):
+            hi_mask = p_new > pmin + 1e-12
+            if not np.any(hi_mask):
+                p_new.fill(1.0 / float(n))
+                break
+            avail = p_new[hi_mask] - pmin
+            avail_sum = float(np.sum(avail))
+            if avail_sum <= 1e-15:
+                p_new.fill(1.0 / float(n))
+                break
+            p_new[hi_mask] -= excess_total * (avail / avail_sum)
+            p_new = np.maximum(p_new, pmin)
+            s_new = float(np.sum(p_new))
+            excess_total = max(0.0, s_new - 1.0)
+            if excess_total <= 1e-12:
+                break
+    elif s_new < 1.0 - 1e-12:
+        rem = 1.0 - s_new
+        # Distribute remainder proportionally, preserving current profile.
+        base = np.maximum(p_new - pmin, 0.0)
+        base_sum = float(np.sum(base))
+        if base_sum > 1e-15:
+            p_new += rem * (base / base_sum)
+        else:
+            p_new += rem / float(n)
+
+    p_new = np.maximum(p_new, pmin)
+    p_new = p_new / max(float(np.sum(p_new)), 1e-15)
+    a_new = np.sqrt(np.maximum(p_new, 0.0))
+    return a_new * np.exp(1j * np.angle(wv))
+
+
 def _normalize_weights(w: np.ndarray, norm: str) -> np.ndarray:
     mode = str(norm).strip().lower()
     if mode == "max_1":
@@ -347,6 +408,7 @@ def synth_null_fill_by_order(
     phase_limits_deg: Optional[float] = None,
     progressive_phase_deg_per_elem: float = 0.0,
     amp_fixed: Optional[np.ndarray] = None,
+    power_floor_percent: float = 0.0,
 ) -> Dict[str, object]:
     eps = np.asarray(eps_grid_deg, dtype=float).reshape(-1)
     if eps.size < 8:
@@ -422,6 +484,9 @@ def synth_null_fill_by_order(
         # Limite automatico de fase para reduzir cancelamentos profundos
         # e preservar o lobo principal durante o preenchimento.
         phase_limit_eff = float(np.clip(55.0 - 0.6 * pct, 25.0, 55.0))
+
+    power_floor_pct = max(0.0, min(100.0, float(power_floor_percent)))
+    power_floor_frac = min(power_floor_pct / 100.0, 1.0 / float(max(1, z.size)))
 
     target_abs_by_side: Dict[str, float] = {}
     track_span_deg_by_side: Dict[str, float] = {}
@@ -507,6 +572,8 @@ def synth_null_fill_by_order(
             amp_fixed=amp_fixed,
         )
         w_proj = _apply_phase_limits_deg(w_proj, phase_limit_eff)
+        if mode_l in ("amplitude", "both") and power_floor_frac > 0.0:
+            w_proj = _apply_power_floor_fraction(w_proj, power_floor_frac)
         w = _normalize_weights(w_proj, "sum_abs2_1")
 
     E_final = B @ w
@@ -578,6 +645,7 @@ def synth_null_fill_by_order(
         "target_percent": pct,
         "achieved_percent": achieved_percent_avg,
         "phase_limit_deg": None if phase_limit_eff is None else float(phase_limit_eff),
+        "power_floor_percent": float(power_floor_pct),
         "null_regions": null_regions,
         "null_levels": null_levels,
     }

@@ -125,3 +125,30 @@ def test_null_fill_by_order_changes_target_region():
     c2 = sorted(abs(float(x.get("eps_deg", 0.0))) for x in (r2.get("null_regions", []) or []))
     assert len(c1) >= 1 and len(c2) >= 1
     assert max(c2) > max(c1)
+
+
+def test_null_fill_by_order_respects_power_floor_percent():
+    f_hz = 900e6
+    lam = 299_792_458.0 / f_hz
+    n = 8
+    z_m = np.arange(n, dtype=float) * (0.65 * lam)
+    eps = np.arange(-90.0, 90.0 + 1e-9, 0.1)
+
+    res = synth_null_fill_by_order(
+        f_hz=f_hz,
+        z_m=z_m,
+        eps_grid_deg=eps,
+        null_order=1,
+        null_fill_percent=20.0,
+        mode="both",
+        mainlobe_tilt_deg=0.0,
+        reg_lambda=1e-5,
+        max_iters=24,
+        preserve_mainlobe_weight=30.0,
+        fill_weight=32.0,
+        power_floor_percent=8.0,
+    )
+    harness = weights_to_harness(np.asarray(res["w"], dtype=complex), f_hz=f_hz, vf=0.78, ref_index=0)
+    pcts = 100.0 * np.asarray(harness.get("p_frac", []), dtype=float).reshape(-1)
+    assert pcts.size == n
+    assert float(np.min(pcts)) >= 7.95

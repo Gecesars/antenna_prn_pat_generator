@@ -129,6 +129,7 @@ class DivisorTab(ctk.CTkFrame):
         self._diagnostics_visible = tk.BooleanVar(value=True)
         self._analysis_suggestions: List[dict] = []
         self._analysis_editable_keys = {"d_ext_mm", "wall_thick_mm"}
+        self._composition_profile_meta: dict = {}
 
         self._rf_fig = None
         self._rf_axes = []
@@ -190,6 +191,12 @@ class DivisorTab(ctk.CTkFrame):
             text="Abrir Analise Avancada",
             width=170,
             command=self._open_divisor_advanced_analysis,
+        ).pack(side=ctk.LEFT, padx=3)
+        ctk.CTkButton(
+            right,
+            text="Abrir Analise Mecanica",
+            width=170,
+            command=self._open_divisor_mechanical_analysis,
         ).pack(side=ctk.LEFT, padx=3)
         ctk.CTkButton(right, text="Save Snapshot", width=110, command=self._save_snapshot).pack(
             side=ctk.LEFT, padx=3
@@ -367,6 +374,16 @@ class DivisorTab(ctk.CTkFrame):
         self.summary_lbl = ctk.CTkLabel(parent, text="Percent sum: 0.00%", anchor="w")
         self.summary_lbl.pack(fill=ctk.X, pady=(0, 4))
 
+        profile_card = ctk.CTkFrame(parent)
+        profile_card.pack(fill=ctk.X, pady=(0, 6))
+        ctk.CTkLabel(profile_card, text="Composition -> Divider", anchor="w").pack(fill=ctk.X, padx=6, pady=(5, 2))
+        self.composition_profile_box = ctk.CTkTextbox(profile_card, height=120, wrap="none")
+        self.composition_profile_box.pack(fill=ctk.X, padx=6, pady=(0, 6))
+        self._set_composition_profile_text(
+            "No composition profile imported.\n"
+            "Use 'Enviar Composicao ao Divisor' in Vertical/Horizontal tabs."
+        )
+
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill=ctk.X, pady=(0, 4))
         ctk.CTkButton(row, text="Build Outputs", width=95, command=self._on_build_outputs).pack(side=ctk.LEFT, padx=2)
@@ -522,6 +539,8 @@ class DivisorTab(ctk.CTkFrame):
         self.var_tree.item(row_id, values=vals)
         self._var_dirty.add(spec["key"])
         self._refresh_pending_changes_label()
+        if spec["key"] in {"f_start_mhz", "f_stop_mhz", "outputs"}:
+            self._refresh_composition_profile_summary()
         if spec["key"] == "outputs":
             self._on_build_outputs()
 
@@ -1026,8 +1045,10 @@ class DivisorTab(ctk.CTkFrame):
         self._results = []
         self._compare_run_ids.clear()
         self._current_run_id = None
+        self._composition_profile_meta = {}
         self._update_kpi_cards(None)
         self._update_rf_plot()
+        self._refresh_composition_profile_summary()
         self._set_status("Divisor state reset.")
 
     def _show_help(self) -> None:
@@ -1055,7 +1076,7 @@ class DivisorTab(ctk.CTkFrame):
             return
 
         params_snapshot = self._aedt_input_params()
-        topology_changed = any(k in {"n_sections", "outputs"} for k in changed)
+        topology_changed = any(k in {"n_sections", "outputs"} for k in changed) or bool(self._split_dirty)
         target = self._resolve_execution_target(params_snapshot, explicit_project_path=None)
         if not target:
             return
@@ -1362,6 +1383,39 @@ class DivisorTab(ctk.CTkFrame):
             pass
         self._publish_divisor_sources_to_advanced(prefer_selected=True, quiet=False)
 
+    def _open_divisor_mechanical_analysis(self) -> None:
+        if self.app is None:
+            messagebox.showwarning("Analise Mecanica", "Mechanical tab is only available in the main application.")
+            return
+        try:
+            self._publish_divisor_context_to_app()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.app, "open_mechanical_view"):
+                self.app.open_mechanical_view()
+            elif hasattr(self.app, "tabs"):
+                self.app.tabs.set("Analise Mecanica")
+        except Exception:
+            pass
+
+        mech_view = getattr(self.app, "mechanical_tab_view", None)
+        if mech_view is None:
+            messagebox.showwarning("Analise Mecanica", "A aba Analise Mecanica nao esta disponivel.")
+            return
+        try:
+            importer = getattr(mech_view, "import_divider_context", None)
+            if callable(importer):
+                importer()
+                self._set_status("Divisor enviado para Analise Mecanica.")
+            else:
+                messagebox.showwarning(
+                    "Analise Mecanica",
+                    "A aba Analise Mecanica nao suporta importacao direta do divisor nesta versao.",
+                )
+        except Exception as exc:
+            messagebox.showerror("Analise Mecanica", str(exc))
+
     def _open_plotly_view(self) -> None:
         if not self._rf_data:
             messagebox.showwarning("Plotly", "No RF data loaded.")
@@ -1557,6 +1611,94 @@ class DivisorTab(ctk.CTkFrame):
             self.diagnostics_box.delete("1.0", tk.END)
             self.diagnostics_box.insert("1.0", text)
 
+    def _set_composition_profile_text(self, text: str) -> None:
+        box = getattr(self, "composition_profile_box", None)
+        if box is None:
+            return
+        try:
+            box.configure(state="normal")
+            box.delete("1.0", tk.END)
+            box.insert("1.0", str(text or ""))
+            box.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _refresh_composition_profile_summary(self) -> None:
+        if not hasattr(self, "composition_profile_box"):
+            return
+        try:
+            self._sync_vars_from_table()
+        except Exception:
+            pass
+        try:
+            self._sync_split_from_tree()
+        except Exception:
+            pass
+
+        pcts: List[float] = []
+        phases: List[float] = []
+        for var in self.percent_vars:
+            try:
+                pcts.append(float(self._parse_float(var.get(), 0.0)))
+            except Exception:
+                pcts.append(0.0)
+        for var in self.phase_vars:
+            try:
+                phases.append(float(self._parse_float(var.get(), 0.0)))
+            except Exception:
+                phases.append(0.0)
+
+        n_outputs = max(len(pcts), len(phases), self._parse_int(self.outputs_var.get(), 0))
+        if n_outputs <= 0:
+            self._set_composition_profile_text("No outputs configured.")
+            return
+        if len(pcts) < n_outputs:
+            pcts.extend([0.0] * (n_outputs - len(pcts)))
+        if len(phases) < n_outputs:
+            phases.extend([0.0] * (n_outputs - len(phases)))
+
+        f_start = self._parse_float(self.f_start_var.get(), 0.0)
+        f_stop = self._parse_float(self.f_stop_var.get(), 0.0)
+        if f_start > 0.0 and f_stop > f_start:
+            f_center = 0.5 * (f_start + f_stop)
+            band = 0.5 * (f_stop - f_start)
+            freq_txt = f"{f_start:.3f}-{f_stop:.3f} MHz | f0={f_center:.3f} MHz | +/-{band:.3f} MHz"
+        else:
+            freq_txt = "-/- MHz"
+
+        spread = (max(pcts) - min(pcts)) if pcts else 0.0
+        split_kind = "asymmetric" if spread > 1e-3 else "symmetric"
+        phase_nonzero = any(abs(float(x)) > 1e-6 for x in phases)
+        meta = self._composition_profile_meta if isinstance(self._composition_profile_meta, dict) else {}
+        mode = str(meta.get("excitation_mode", "") or "").strip().lower()
+        if mode not in {"amplitude", "phase", "both"}:
+            mode = "both" if phase_nonzero else "amplitude"
+
+        source = str(meta.get("source", "manual") or "manual")
+        harness_used = bool(meta.get("harness_used", False))
+        null_fill = meta.get("null_fill_pct", None)
+        null_fill_txt = "-"
+        if null_fill is not None:
+            try:
+                null_fill_txt = f"{float(null_fill):.2f}%"
+            except Exception:
+                null_fill_txt = str(null_fill)
+
+        lines = [
+            f"Source: {source}",
+            f"Mode: {mode}",
+            f"Split: {split_kind}",
+            f"Outputs: {n_outputs}",
+            f"Frequency: {freq_txt}",
+            f"Harness profile: {'yes' if harness_used else 'no'}",
+            f"Null fill target: {null_fill_txt}",
+            "",
+            "Output list (% / phase):",
+        ]
+        for idx in range(n_outputs):
+            lines.append(f"OUT {idx + 1:02d}: {float(pcts[idx]):9.4f}% | {float(phases[idx]):9.3f} deg")
+        self._set_composition_profile_text("\n".join(lines))
+
     def _append_log(self, text: str) -> None:
         for box in (getattr(self, "results_log_box", None), getattr(self, "diagnostics_box", None)):
             if box is None:
@@ -1663,12 +1805,140 @@ class DivisorTab(ctk.CTkFrame):
             return
         self._post_ui_status(msg)
 
+    def _publish_divisor_context_to_app(self) -> None:
+        if self.app is None:
+            return
+        try:
+            setattr(self.app, "divisor_last_project_path", str(self._last_project_path or ""))
+            setattr(self.app, "divisor_last_design_name", str(self._last_design_name or "DivisorCoaxial"))
+        except Exception:
+            return
+        try:
+            if hasattr(self.app, "_refresh_project_overview"):
+                self.app._refresh_project_overview()
+        except Exception:
+            pass
+
     def _set_project_label(self, project_path: Optional[str], design_name: Optional[str] = None) -> None:
         token = str(design_name or self._last_design_name or "").strip() or "-"
         if project_path:
             self.project_lbl.configure(text=f"Project/Design: {project_path} | {token}")
         else:
             self.project_lbl.configure(text="Project/Design: -")
+
+    def import_composition_profile(self, profile: dict) -> bool:
+        """Import composition parameters from deep3 composition tabs.
+
+        Expected keys (all optional with sane fallbacks):
+        - source: str
+        - n_outputs: int
+        - f_center_mhz / band_mhz or f_start_mhz / f_stop_mhz
+        - percentages: list[float]
+        - phases_deg: list[float]
+        - excitation_mode: amplitude | phase | both
+        """
+        if not isinstance(profile, dict):
+            raise TypeError("Composition profile must be a dict.")
+
+        source = str(profile.get("source", "composition") or "composition").strip() or "composition"
+        mode = str(profile.get("excitation_mode", "amplitude") or "amplitude").strip().lower()
+        if mode not in {"amplitude", "phase", "both"}:
+            mode = "amplitude"
+
+        n_outputs = max(1, self._parse_int(str(profile.get("n_outputs", 1) or 1), 1))
+
+        f_start = self._parse_float(str(profile.get("f_start_mhz", "") or ""), 0.0)
+        f_stop = self._parse_float(str(profile.get("f_stop_mhz", "") or ""), 0.0)
+        if not (f_start > 0.0 and f_stop > f_start):
+            f_center = self._parse_float(str(profile.get("f_center_mhz", "") or ""), 0.0)
+            band = abs(self._parse_float(str(profile.get("band_mhz", "") or ""), 0.0))
+            if f_center <= 0.0:
+                f_center = self._parse_float(self.f_start_var.get(), 700.0)
+            if band <= 0.0:
+                band = max(1.0, f_center * 0.01)
+            f_start = max(0.001, f_center - band)
+            f_stop = max(f_start + 0.001, f_center + band)
+
+        raw_pct = profile.get("percentages", [])
+        raw_phase = profile.get("phases_deg", [])
+        percentages: List[float] = []
+        phases: List[float] = []
+        if isinstance(raw_pct, (list, tuple, np.ndarray)):
+            for item in list(raw_pct):
+                try:
+                    percentages.append(float(item))
+                except Exception:
+                    percentages.append(0.0)
+        if isinstance(raw_phase, (list, tuple, np.ndarray)):
+            for item in list(raw_phase):
+                try:
+                    phases.append(float(item))
+                except Exception:
+                    phases.append(0.0)
+
+        if len(percentages) < n_outputs:
+            default_pct = 100.0 / float(n_outputs)
+            percentages.extend([default_pct] * (n_outputs - len(percentages)))
+        percentages = percentages[:n_outputs]
+        percentages = [max(0.0, float(x)) for x in percentages]
+        total_pct = float(sum(percentages))
+        if total_pct <= 0.0:
+            percentages = [100.0 / float(n_outputs)] * n_outputs
+        else:
+            scale = 100.0 / total_pct
+            percentages = [float(x) * scale for x in percentages]
+
+        if len(phases) < n_outputs:
+            phases.extend([0.0] * (n_outputs - len(phases)))
+        phases = phases[:n_outputs]
+        if mode == "amplitude":
+            phases = [0.0] * n_outputs
+
+        self._composition_profile_meta = {
+            "source": source,
+            "excitation_mode": mode,
+            "harness_used": bool(profile.get("harness_used", False)),
+            "null_fill_pct": profile.get("null_fill_pct", None),
+            "asymmetric": bool(profile.get("asymmetric", False)),
+        }
+
+        self.f_start_var.set(f"{float(f_start):.6f}")
+        self.f_stop_var.set(f"{float(f_stop):.6f}")
+        self.outputs_var.set(str(n_outputs))
+
+        if hasattr(self, "var_tree"):
+            row_updates = {
+                "f_start_mhz": self.f_start_var.get(),
+                "f_stop_mhz": self.f_stop_var.get(),
+                "outputs": str(n_outputs),
+            }
+            for key, val in row_updates.items():
+                if self.var_tree.exists(key):
+                    vals = list(self.var_tree.item(key, "values"))
+                    vals[1] = str(val)
+                    vals[4] = "Yes"
+                    vals[5] = source
+                    self.var_tree.item(key, values=vals)
+                    self._var_dirty.add(key)
+
+        self._build_output_rows(n_outputs, keep_existing=False)
+        for idx in range(n_outputs):
+            self.percent_vars[idx].set(f"{float(percentages[idx]):.6f}")
+            self.phase_vars[idx].set(f"{float(phases[idx]):.6f}")
+        self._rebuild_split_tree_from_vars()
+
+        self._split_dirty = True
+        self._refresh_pending_changes_label()
+        self._update_percent_sum()
+        self._refresh_composition_profile_summary()
+
+        spread = max(percentages) - min(percentages) if percentages else 0.0
+        asym_txt = "assimetrico" if spread > 1e-3 else "simetrico"
+        self._set_status(
+            f"Perfil importado de {source}: {n_outputs} saidas, "
+            f"{float(f_start):.3f}-{float(f_stop):.3f} MHz, modo={mode}, {asym_txt}."
+        )
+        return True
 
     def _on_build_outputs(self) -> None:
         self._sync_vars_from_table()
@@ -1730,6 +2000,7 @@ class DivisorTab(ctk.CTkFrame):
             except Exception:
                 continue
         self.summary_lbl.configure(text=f"Percent sum: {total:.2f}%")
+        self._refresh_composition_profile_summary()
 
     def _set_equal_split(self) -> None:
         self._sync_split_from_tree()
@@ -1765,6 +2036,18 @@ class DivisorTab(ctk.CTkFrame):
     def _aedt_input_params(self) -> dict:
         self._sync_vars_from_table()
         self._sync_split_from_tree()
+        split_percentages: list[float] = []
+        split_phases_deg: list[float] = []
+        for var in self.percent_vars:
+            try:
+                split_percentages.append(self._parse_float(var.get(), 0.0))
+            except Exception:
+                split_percentages.append(0.0)
+        for var in self.phase_vars:
+            try:
+                split_phases_deg.append(self._parse_float(var.get(), 0.0))
+            except Exception:
+                split_phases_deg.append(0.0)
         return {
             "f_start": self._parse_float(self.f_start_var.get(), 800.0),
             "f_stop": self._parse_float(self.f_stop_var.get(), 1200.0),
@@ -1773,11 +2056,21 @@ class DivisorTab(ctk.CTkFrame):
             "n_sections": self._parse_int(self.n_sections_var.get(), 4),
             "n_outputs": self._parse_int(self.outputs_var.get(), max(1, len(self.percent_vars))),
             "diel_material": str(self.diel_material_var.get() or "Ar"),
+            "output_split_percentages": split_percentages,
+            "output_phase_deg": split_phases_deg,
         }
 
     def _normalize_param_value(self, key: str, value) -> object:
         if value is None:
             return None
+        if isinstance(value, (list, tuple)):
+            out = []
+            for item in value:
+                try:
+                    out.append(round(float(item), 9))
+                except Exception:
+                    out.append(str(item))
+            return tuple(out)
         if key in {"n_sections", "n_outputs"}:
             return int(round(float(value)))
         if key == "diel_material":
@@ -1795,7 +2088,7 @@ class DivisorTab(ctk.CTkFrame):
         return changed
 
     def _topology_changed(self, changed_keys: List[str]) -> bool:
-        return any(k in {"n_sections", "n_outputs"} for k in changed_keys)
+        return any(k in {"n_sections", "n_outputs", "output_split_percentages"} for k in changed_keys)
 
     def _ask_edit_action(self, changed_keys: List[str], topology_changed: bool) -> Optional[str]:
         if not changed_keys:
@@ -1940,12 +2233,14 @@ class DivisorTab(ctk.CTkFrame):
         }
 
     def _format_aedt_geometry(self, geo: dict) -> str:
+        mode = str(geo.get("topology_mode", "symmetric") or "symmetric")
         lines = [
             "AEDT geometry (coaxial divider)",
             "",
             f"Input f_start: {float(geo['f_start']):.6f} MHz",
             f"Input f_stop : {float(geo['f_stop']):.6f} MHz",
             f"Center f0    : {float(geo['f0_mhz']):.6f} MHz",
+            f"Mode         : {mode}",
             f"n_sections   : {int(geo['n_sections'])}",
             f"n_outputs    : {int(geo['n_outputs'])}",
             f"d_ext        : {float(geo['d_ext']):.6f} mm",
@@ -1962,6 +2257,17 @@ class DivisorTab(ctk.CTkFrame):
         d_vals = [f"{float(v):.6f}" for v in geo.get("main_diams", [])]
         lines.append("z_sects    : " + ", ".join(z_vals))
         lines.append("main_diams : " + ", ".join(d_vals))
+        if bool(geo.get("is_asymmetric_split")):
+            split_vals = [f"{float(v):.4f}" for v in geo.get("output_split_percentages", [])]
+            z_out = [f"{float(v):.6f}" for v in geo.get("output_impedances_ohm", [])]
+            l_out = [f"{float(v):.6f}" for v in geo.get("output_branch_lengths_mm", [])]
+            z_junc = float(geo.get("target_junction_impedance_ohm", 0.0))
+            zin_branch = [f"{float(v):.6f}" for v in geo.get("target_branch_input_impedances_ohm", [])]
+            lines.append("split_pct  : " + ", ".join(split_vals))
+            lines.append("z_out_ohm  : " + ", ".join(z_out))
+            lines.append("len_out_mm : " + ", ".join(l_out))
+            lines.append(f"z_eq_junc  : {z_junc:.6f}")
+            lines.append("zin_junc_i : " + ", ".join(zin_branch))
         return "\n".join(lines)
 
     def _render_aedt_params_loaded(self, geo: dict) -> None:
@@ -2064,6 +2370,7 @@ class DivisorTab(ctk.CTkFrame):
         self._last_project_path = str(project_path)
         self._last_design_name = str(design_name or "DivisorCoaxial")
         self._last_applied_params = dict(applied_params or {})
+        self._publish_divisor_context_to_app()
         self._set_project_label(self._last_project_path, self._last_design_name)
         messagebox.showinfo("AEDT", f"HFSS model atualizado:\n{project_path}\nDesign: {self._last_design_name}")
 
@@ -2075,6 +2382,7 @@ class DivisorTab(ctk.CTkFrame):
         self._last_project_path = str(data.get("project_path") or self._last_project_path or "")
         self._last_design_name = str(data.get("design_name") or self._last_design_name or "DivisorCoaxial")
         self._last_applied_params = dict(applied_params or {})
+        self._publish_divisor_context_to_app()
         self._set_project_label(self._last_project_path, self._last_design_name)
         self._capture_variable_snapshot()
         self._split_dirty = False
